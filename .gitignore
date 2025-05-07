@@ -3,5 +3,5 @@
 sessions/*.db
 *.zip
 __pycache__/
-logs/
+logs/*.log
 *.pyc
