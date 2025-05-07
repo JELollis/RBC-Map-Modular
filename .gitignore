@@ -1,0 +1,7 @@
+.idea/
+.vs/
+sessions/*.db
+*.zip
+__pycache__/
+logs/
+*.pyc
