@@ -5,3 +5,5 @@ sessions/*.db
 __pycache__/
 logs/*.log
 *.pyc
+dist/
+*.xml
