@@ -4,7 +4,7 @@ from directories  import *
 from logging_setup import *
 from cookies import *
 from database import *
-from avitd_scraper import *
+from scraper import *
 from character_dialog import *
 from compass_overlay import *
 from css_customization_dialog import *
@@ -67,10 +67,10 @@ class RBCCommunityMap(QMainWindow):
     @splash_message(None)
     def _init_scraper(self) -> None:
         """Initialize the AVITD scraper and start scraping in a separate thread."""
-        self.AVITD_scraper = AVITDScraper()
-        # Use QThread for non-blocking scraping (assuming AVITDScraper supports it)
+        self.scraper = Scraper()
+        # Use QThread for non-blocking scraping (assuming scraper supports it)
         from PySide6.QtCore import QThreadPool
-        QThreadPool.globalInstance().start(lambda: self.AVITD_scraper.scrape_guilds_and_shops())
+        QThreadPool.globalInstance().start(lambda: self.scraper.scrape_guilds_and_shops())
         logging.debug("Started scraper in background thread")
 
     @splash_message(None)

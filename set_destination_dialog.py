@@ -224,7 +224,8 @@ class SetDestinationDialog(QDialog):
             parent = cast("MainWindowType", self.parent)
 
             # Run scraper to update shops and guilds
-            parent.AVITD_scraper.scrape_guilds_and_shops()
+            parent.scraper.scrape()
+            self.load_next_move_times()
 
             # Update only shops and guilds coordinates from database
             with sqlite3.connect(DB_PATH) as conn:

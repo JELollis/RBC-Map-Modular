@@ -14,6 +14,7 @@ required_modules = {
     'bs4': 'beautifulsoup4',
     'datetime': 'datetime',        # Built-in
     're': 're',                    # Built-in
+    'discord': 'discord.py',
     'requests': 'requests',
     'sqlite3': 'sqlite3',          # Built-in
     'time': 'time',                # Built-in
@@ -85,6 +86,7 @@ from collections.abc import KeysView
 from datetime import datetime, timedelta, timezone
 
 # Third-party
+import discord
 import requests
 from bs4 import BeautifulSoup
 

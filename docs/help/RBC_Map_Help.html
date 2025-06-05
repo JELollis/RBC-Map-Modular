@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+
+<html><head><meta charset="utf-8"/>
+<title>RBC Community Map Help</title>
+<style>
+/* ===== Layout & Nav ===== */
+body {
+    margin: 0;
+    display: flex;
+    flex-direction: row;
+    height: 100vh;
+    background-color: #000000;
+    color: #dddddd;
+    font-family: Verdana, Arial, sans-serif;
+    font-size: small;
+}
+nav {
+    flex-shrink: 0;
+    width: 250px;
+    background: #111;
+    padding: 1em;
+    overflow-y: auto;
+    height: 100vh;
+    border-right: 1px solid #333;
+}
+main {
+    flex-grow: 1;
+    padding: 2em;
+    overflow-y: auto;
+    color: #dddddd;
+}
+
+/* ===== Navigation Styling ===== */
+nav details {
+    margin: 0.25em 0;
+}
+nav summary {
+    color: #ff4444;
+    cursor: pointer;
+    font-weight: bold;
+    margin-top: 0.5em;
+}
+nav details > details > summary {
+    margin-left: 1em;
+    font-weight: normal;
+}
+nav details > details > details > summary {
+    margin-left: 2em;
+    font-style: italic;
+}
+nav a {
+    display: block;
+    text-decoration: none;
+    color: #ccc;
+    margin: 0.25em 0 0.25em 1.5em;
+}
+nav details > details a {
+    margin-left: 2.5em;
+}
+nav details > details > details a {
+    margin-left: 3.5em;
+}
+nav a:hover {
+    color: #ffffff;
+    background-color: #222;
+}
+
+/* ===== Content Styling ===== */
+h1 {
+    font-size: x-large;
+    color: #ff0000;
+    text-align: center;
+    margin-bottom: 1em;
+}
+h2 {
+    color: #ff0000;
+    margin-top: 0.5em;
+}
+h3 {
+    color: #ffffff;
+}
+a {
+    color: #66aaff;
+}
+p, li, td {
+    color: #dddddd;
+}
+pre {
+    background-color: #111111;
+    padding: 1em;
+    border: 1px solid #333;
+    overflow-x: auto;
+    color: #00ff00;
+}
+</style>
+</head>
+<body>
+<nav><h2>Help Topics</h2><details><summary>Overview</summary><a href="#Overview">Overview</a></details><details><summary>User Interface</summary><a href="#UI_Overview">UI Overview</a><a href="#Identifying_UI_Parts">Identifying UI Parts</a></details><details><summary>Menu Items</summary><details><summary>File Menu</summary><a href="#FileMenu">FileMenu</a></details><details><summary>Settings Menu</summary><a href="#SettingsMenu">SettingsMenu</a><a href="#Theme_Customization">Theme Customization</a><a href="#CSS_Customization">CSS Customization</a></details><details><summary>Tools Menu</summary><a href="#ToolsMenu">ToolsMenu</a><a href="#DatabaseViewer">DatabaseViewer</a><a href="#PowerReference">PowerReference</a><a href="#ShoppingList">ShoppingList</a><a href="#Damage_Calculator">Damage Calculator</a><a href="#LogViewer">LogViewer</a></details><details><summary>Resources Menu</summary><a href="#ResourcesMenu">ResourcesMenu</a></details><details><summary>Help Menu</summary><a href="#HelpMenu">HelpMenu</a><a href="#Reporting_an_Issue">Reporting an Issue</a></details></details><details><summary>Minimap and Information Bars</summary><a href="#Minimap_and_Information_Bars">Minimap and Information Bars</a><a href="#MinimapControls">MinimapControls</a><a href="#Navigating_the_Minimap">Navigating the Minimap</a><a href="#SetDestination">SetDestination</a><a href="#InfoBars">InfoBars</a></details><details><summary>Character Management</summary><a href="#Character_Management">Character Management</a><a href="#Adding_Modifying_and_Removing_Characters">Adding Modifying and Removing Characters</a></details></nav>
+<main>
+<section id="Adding_Modifying_and_Removing_Characters" style="display: none;">
+<h2>Adding, Modifying, and Removing Characters</h2>
+<p>RBCMap allows you to store multiple vampire characters, making it easy to manage alts and avoid repeated logins. All character data is stored locally and securely in your database.</p>
+<h3>Adding a Character:</h3>
+<ol>
+<li>Click the <strong>Add</strong> button below the character list.</li>
+<li>Enter the vampire’s exact username and password.</li>
+<li>Click <strong>OK</strong> to save. The character will appear in the list.</li>
+</ol>
+<h3>Modifying a Character:</h3>
+<p>The <strong>Modify</strong> button lets you correct or update the saved name and password for an existing character. This is useful if:</p>
+<ul>
+<li>You changed your vampire’s password in the game.</li>
+<li>You made a typo when first adding the character.</li>
+</ul>
+<p>To modify a character:</p>
+<ol>
+<li>Select the character in the list and click <strong>Modify</strong>.</li>
+<li>You’ll be prompted to re-enter both the vampire’s name and password.</li>
+<li>The saved entry will be updated with your new input.</li>
+</ol>
+<h3>Removing a Character:</h3>
+<ol>
+<li>Select the character from the list.</li>
+<li>Click the <strong>Remove</strong> button.</li>
+<li>Confirm the deletion. This will erase the character’s login credentials and stored state from your database.</li>
+</ol>
+<h3>Notes:</h3>
+<ul>
+<li>Data is stored locally; no credentials are ever sent outside the application except during login.</li>
+<li>You can manage as many characters as you like.</li>
+</ul>
+<p>This feature is ideal for users managing multiple accounts, keeping track of alts, or quickly logging in after password changes.</p>
+</section>
+<section id="CSS_Customization" style="display: none;">
+<h2>CSS Customization Dialog</h2>
+<p>The CSS Customization Dialog allows advanced users to visually modify the appearance of the Ravenblack game interface using custom Cascading Style Sheets (CSS). These styles are injected live into the embedded webview and can be toggled per character.</p>
+<img alt="CSS Profile List" src="images/CSS Customization 1.png" width="450"/>
+<h3>CSS Profile Management</h3>
+<ul>
+<li>Create, rename, or delete multiple CSS profiles.</li>
+<li>Assign specific profiles to characters.</li>
+<li>Changes are saved in the local database and re-applied automatically.</li>
+</ul>
+<h3>Upload CSS File</h3>
+<p>You can import a pre-written CSS file using the <strong>Upload</strong> button:</p>
+<ul>
+<li>Click <strong>Upload</strong> to browse for a <code>.css</code> file on your system.</li>
+<li>The contents of the file will be loaded into the current profile.</li>
+<li>This is ideal for importing styles created in a text editor or shared by other users.</li>
+</ul>
+<img alt="Color Picker" src="images/CSS Customization 2.png" width="450"/>
+<h3>Color Editing</h3>
+<ul>
+<li>Choose text and background colors for key page areas.</li>
+<li>Live preview shows the effect in real time within the game window.</li>
+</ul>
+<img alt="Background Image Selection" src="images/CSS Customization 3.png" width="450"/>
+<h3>Background Image &amp; Layout Options</h3>
+<ul>
+<li>Set a custom background image from file.</li>
+<li>Choose whether the image tiles or stretches.</li>
+</ul>
+<img alt="Shadow and Advanced Effects" src="images/CSS Customization 4.png" width="450"/>
+<h3>Advanced Styling</h3>
+<ul>
+<li>Add or remove drop shadows on text and HUD elements.</li>
+<li>Optional manual override for raw CSS injection.</li>
+</ul>
+<p>This dialog is intended for users comfortable with web styling or those who want a highly personalized UI theme.</p>
+</section>
+<section id="Character_Management" style="display: none;">
+<h2>Character Management</h2>
+<p>The <strong>Character Management</strong> system allows you to store, switch, and manage multiple vampires within RBCMap. All character data is stored locally, including login credentials, destination memory, and session state.</p>
+<img alt="Character List Dialog" src="images/Character List.png" width="450"/>
+<h3>What You Can Do:</h3>
+<ul>
+<li><strong>Add or remove characters</strong> with their names and passwords securely stored in your local database.</li>
+<li><strong>Switch between characters</strong> using stored login cookies for instant login and session recall.</li>
+<li><strong>Rename or delete entries</strong> if a character is no longer in use.</li>
+<li><strong>View login status</strong> and track which character is currently active.</li>
+</ul>
+<h3>Related Topics:</h3>
+<ul>
+<li><a href="#Adding_Modifying_and_Removing_Characters"> Adding, Modifying and Removing Characters</a></li>
+</ul>
+<p>This system makes it easy to manage alts, experiment with travel paths, and resume progress across characters without manually logging in every time.</p>
+</section>
+<section id="Compass_Routes" style="display: none;">
+<h2>Compass Routes Dialog</h2>
+<p>The <strong>Compass Routes</strong> dialog shows the AP-efficient path to a selected destination on the minimap. It visually draws navigation lines to help guide your vampire's movement across the city grid. </p>
+<p><img alt="Compass Routes Dialog" src="images/Compass Routes.png"/></p>
+<p>You can open the <strong>Compass Routes</strong> dialog by clicking the <strong>Compass</strong> icon on the route label at the top of the map.</p>
+<p><img alt="Route Label" src="images/Route Label.png"/></p>
+<h3>Green Route – Direct Path</h3>
+<p>The <strong>green line</strong> represents the shortest walking route between your current location and your selected destination.</p>
+<img alt="Minimap showing direct walking route" src="images/Minimap_direct_route.png" width="300"/>
+<ul>
+<li>This is the route used when no transit stops are required or beneficial.</li>
+<li>Useful for short distances.</li>
+</ul>
+<h3>Purple Route – Transit Path</h3>
+<p>The <strong>purple line</strong> represents the most efficient known route that includes transit options such as rail or bus.</p>
+<img alt="Minimap showing route using transit" src="images/Minimap_Transit_route.png" width="300"/>
+<ul>
+<li>Appears when using transit results in fewer AP spent than walking directly.</li>
+<li>Useful for crossing long distances.</li>
+</ul>
+<h3>When the Routes Appear:</h3>
+<ul>
+<li>Routes update automatically whenever your destination changes.</li>
+<li>If no destination is set, no route will be drawn.</li>
+</ul>
+<p>The Compass Routes system makes it easy to make travel decisions quickly and ensures your AP is used efficiently while navigating RavenBlack City.</p>
+</section>
+<section id="Damage_Calculator" style="display: none;">
+<h2>Damage Calculator</h2>
+<p>The <strong>Damage Calculator</strong> estimates the number and type of weapons needed to inflict a target amount of blood damage on another vampire, based on your Charisma level. It automatically calculates which items to buy from Discount Magic and how many hits are required.</p>
+<img alt="Damage Calculator Dialog" src="images/Damage Calculator.png" width="350"/>
+<h3>How to Use:</h3>
+<ol>
+<li><strong>Enter Target BP:</strong> Type in how much blood you want to drain from your target.</li>
+<li><strong>Select Charisma Level:</strong> Choose your current Charisma level (affects cost reductions).</li>
+<li><strong>Click Calculate:</strong> The dialog will show:
+    <ul>
+<li>Which weapons to buy</li>
+<li>Quantities of each</li>
+<li>Total cost at Discount Magic</li>
+<li>Total hits required</li>
+</ul>
+</li>
+</ol>
+<h3>Notes:</h3>
+<ul>
+<li>Only considers item prices from <strong>Discount Magic</strong>.</li>
+<li>Uses a fixed weapon damage formula based on typical item strength.</li>
+</ul>
+<p>This tool is especially useful when preparing for a PvP fight or mass hunt. It ensures you have enough coins and inventory to fully drain your target.</p>
+</section>
+<section id="DatabaseViewer" style="display: none;">
+<h2>Database Viewer</h2>
+<p>The <strong>Database Viewer</strong> is a read-only utility that allows you to browse the contents of RBCMap’s internal SQLite database. It is useful for understanding saved data, troubleshooting, and development insight.</p>
+<img alt="Database Viewer Dialog" src="images/Database Viewer.png" width="600"/>
+<h3>Included Tables:</h3>
+<p>You can browse the following tables:</p>
+<ul>
+<li><code>banks</code></li>
+<li><code>characters</code></li>
+<li><code>coins</code></li>
+<li><code>color_mappings</code></li>
+<li><code>columns</code>, <code>rows</code></li>
+<li><code>cookies</code></li>
+<li><code>css_profiles</code>, <code>custom_css</code></li>
+<li><code>destinations</code>, <code>recent_destinations</code></li>
+<li><code>discord_servers</code></li>
+<li><code>guilds</code></li>
+<li><code>last_active_character</code></li>
+<li><code>placesofinterest</code></li>
+<li><code>powers</code></li>
+<li><code>settings</code></li>
+<li><code>shops</code>, <code>shop_items</code></li>
+<li><code>taverns</code></li>
+<li><code>transits</code></li>
+<li><code>userbuildings</code></li>
+</ul>
+<h3>Features:</h3>
+<ul>
+<li>View records in each table in raw tabular format.</li>
+<li>Quick access for debugging or verifying app state.</li>
+</ul>
+<h3>Note:</h3>
+<p>This dialog is <strong>read-only</strong>. For advanced editing, you can open <code>rbc_map_data.db</code> (located in: <code>C:\Program Files (x86)\RBC Community Map\sessions\</code>) using tools like <a href="https://sqlitebrowser.org/" target="_blank">DB Browser for SQLite</a>. Be sure to back up the file before making any external changes.</p>
+</section>
+<section id="FileMenu" style="display: none;">
+<h2>File Menu</h2>
+<p>The <strong>File</strong> menu contains basic application-level options such as saving screenshots and exiting the program.</p>
+<img alt="File Menu Options" src="images/File Menu.png" width="300"/>
+<h3>Menu Options:</h3>
+<ul>
+<li><strong>Save Webpage Screenshot:</strong> Captures only the embedded game view (web browser panel). Saves it as a PNG in the default screenshots folder.</li>
+<li><strong>Save App Screenshot:</strong> Captures the entire RBCMap window, including minimap, character list, and game view. Useful for reporting bugs or archiving your current session.</li>
+<li><strong>Exit:</strong> Closes the application immediately.</li>
+</ul>
+<p>This menu is ideal for quickly saving a visual snapshot of your play session or exiting cleanly after use.</p>
+</section>
+<section id="HelpMenu" style="display: none;">
+<h2>Help Menu</h2>
+<p>The <strong>Help</strong> menu provides access to official game information, application details, issue reporting, and this help file. It’s your go-to place when you need documentation or support.</p>
+<img alt="Help Menu Options" src="images/Help Menu.png" width="300"/>
+<h3>Menu Options:</h3>
+<ul>
+<li><strong>FAQ:</strong> Opens the in-game <em>Frequently Asked Questions</em> page in your system's default browser.</li>
+<li><strong>How to Play:</strong> Opens the in-game "How to play" page in your browser.</li>
+<li><strong>About:</strong> Displays the current RBCMap version and licensing information in a dialog window.</li>
+<li><strong>Credits:</strong> Rolls a short in-app credits screen showing developers, contributors, testers, and special thanks.</li>
+<li><strong><a href="#Reporting_an_Issue">Report an Issue</a>:</strong> Opens a link to submit a bug or feature request via GitHub. (See separate help entry for details.)</li>
+<li><strong>Help:</strong> Opens this Help File (CHM) from within the app. You can also press <code>F1</code> at any time to access it.</li>
+</ul>
+<h3>Tips:</h3>
+<ul>
+<li>Internet access is required for external pages (FAQ, How to Play, GitHub).</li>
+<li>All items open in your system browser except for "About," "Credits," and "Help," which are handled internally.</li>
+</ul>
+</section>
+<section id="Identifying_UI_Parts" style="display: none;">
+<h2>Identifying UI Parts</h2>
+<p>The labeled image below highlights the main components of the RBCMap interface. Each part is numbered and described to help you understand the layout and function of the window.</p>
+<img alt="Labeled Main UI" src="images/Main UI - Labeled.png" width="700"/>
+<h3>UI Component Breakdown</h3>
+<table>
+<tr><th>#</th><th>Element</th><th>Description</th></tr>
+<tr><td>①</td><td>Menu Bar</td><td>Provides access to File, Settings, Tools, Resources, and Help menus.</td></tr>
+<tr><td>②</td><td>Navigation Bar</td><td>Back/Forward controls, compass display (when routing), and Ko-fi donation button.</td></tr>
+<tr><td>③</td><td>Minimap Grid</td><td>Zoomable display of your surrounding area with route lines and icons for banks, taverns, and more.</td></tr>
+<tr><td>④</td><td>Info Panel</td><td>Displays nearby known locations and AP cost to reach them. Updates live as you move.</td></tr>
+<tr><td>⑤</td><td>Destination Controls</td><td>Buttons for zooming, refreshing, recentering, and opening destination dialogs.</td></tr>
+<tr><td>⑥</td><td>Character List Panel</td><td>Lets you add, modify, or remove vampire accounts. The selected character is used for login and routing.</td></tr>
+<tr><td>⑦</td><td>Game WebView</td><td>Displays the live RavenBlack game interface, enabling all standard in-game actions.</td></tr>
+</table>
+<p>These components remain visible throughout gameplay and form the core interaction points for all other dialogs and tools.</p>
+</section>
+<section id="InfoBars" style="display: none;">
+<h2>Information Bars</h2>
+<p>The information bars beneath the minimap display the most relevant nearby travel options, including the closest bank, tavern, and transit hub. When a destination is selected, they also show route comparisons to that target.</p>
+<h3>Without a Destination Set:</h3>
+<img alt="Information Bars without Destination" src="images/InfoBars_No_Dest.png" width="500"/>
+<ul>
+<li><span style="color:blue;"><strong>Blue Bar:</strong></span> Nearest <strong>bank</strong> to your current location.</li>
+<li><span style="color:red;"><strong>Red Bar:</strong></span> Nearest <strong>transit hub</strong> (rail, bus, etc.).</li>
+<li><span style="color:goldenrod;"><strong>Goldenrod Bar:</strong></span> Nearest <strong>tavern</strong>.</li>
+</ul>
+<h3>With a Destination Set:</h3>
+<img alt="Information Bars with Destination Set" src="images/InfoBars_Dest.png" width="500"/>
+<ul>
+<li><span style="color:green;"><strong>Green Bar:</strong></span> AP cost and tile distance to the destination <strong>using a direct walking route</strong>.</li>
+<li><span style="color:purple;"><strong>Purple Bar:</strong></span> AP cost and tile distance <strong>using known transit points</strong> along the route (if more efficient).</li>
+</ul>
+<h3>Live Updates:</h3>
+<ul>
+<li>Bars refresh automatically each time you move or change destinations.</li>
+</ul>
+<p>These bars provide fast, glanceable routing intelligence so you can plan each move efficiently without needing to manually check coordinates or open dialogs.</p>
+</section>
+<section id="LogViewer" style="display: none;">
+<h2>Log Viewer</h2>
+<p>The <strong>Log Viewer</strong> lets you browse saved RBCMap log files from within the app. It is useful for reviewing debug output, verifying behavior, or reporting bugs.</p>
+<img alt="Log Viewer Dialog" src="images/Log Viewer.png" width="500"/>
+<h3>Features:</h3>
+<ul>
+<li><strong>Log File List:</strong> All log files are displayed by date in the left panel.</li>
+<li><strong>Content Viewer:</strong> Selecting a log file displays its full contents in the right panel.</li>
+<li><strong>Log Level Filters:</strong> Checkboxes let you show or hide lines by severity:
+    <ul>
+<li><code>DEBUG</code></li>
+<li><code>INFO</code></li>
+<li><code>WARNING</code></li>
+<li><code>ERROR</code></li>
+<li><code>CRITICAL</code></li>
+</ul>
+</li>
+<li><strong>Delete Button:</strong> Permanently removes the selected log file from disk.</li>
+</ul>
+<h3>Use Cases:</h3>
+<ul>
+<li>Quickly verify startup processes or scraper events</li>
+<li>Review application crashes or errors</li>
+<li>Trim down logs before sharing them with support</li>
+<li>Quick and easy access to the log files for use when filing a bug report</li>
+</ul>
+<h3>Additional Info:</h3>
+<ul>
+<li>Log files are stored in the <code>C:\Program Files(x86)\RBC Community Map\logs\</code> folder alongside the app.</li>
+<li>Logs are created new every day and will log all messages based on the selected log level in the <a href="#SettingsMenu">Settings Menu</a>.</li>
+</ul>
+<p>This viewer gives you transparent access to behind-the-scenes activity, helping you troubleshoot or track changes across sessions.</p>
+</section>
+<section id="MenuItems" style="display: none;">
+<h2>Menu Items Overview</h2>
+<p>The RBCMap main menu bar is located at the top of the application and provides access to all settings, tools, customization options, and help features.</p>
+<img alt="Main Menu Bar" src="images/MenuBar.png" width="500"/>
+<p>The menu bar includes the following categories:</p>
+<ul>
+<li><a href="#FileMenu">File</a> – Save screenshots or exit the application.</li>
+<li><a href="#SettingsMenu">Settings</a> – Change themes, keybindings, CSS profiles, and logging level.</li>
+<li><a href="#ToolsMenu">Tools</a> – Access all utility features such as log viewer, damage calculator, and database viewer.</li>
+<li><a href="#ResourcesMenu">Resources</a> – Quickly open relevant guides, maps, and community tools.</li>
+<li><a href="#HelpMenu">Help</a> – View help, credits, FAQ, or report bugs.</li>
+</ul>
+<p>Click on any of the sections above to learn more about what each menu offers.</p>
+</section>
+<section id="Minimap_and_Information_Bars" style="display: none;">
+<h2>Minimap and Information Bars</h2>
+<p>The minimap and information panels form the core of RBCMap’s navigation system. They allow you to visualize your current location, plan movement across the grid, monitor AP costs, and quickly identify nearby landmarks like taverns, banks, and transit hubs.</p>
+<p>The minimap displays your vampire's position, highlights routes to destinations, and overlays contextual data like direction lines and city feature markers. Below the minimap, the information bars update in real time to show AP costs, route comparisons, and your closest known points of interest.</p>
+<h3>This section includes:</h3>
+<ul>
+<li><a href="#MinimapControls">Minimap Controls</a> – Overview of zoom controls, the recenter and refresh buttons, and the Discord / Website access shortcuts.</li>
+<li><a href="#Navigating_the_Minimap">Navigating the Minimap</a> – Explains tile-clicking, dropdown routing, and how the map recenters on movement.</li>
+<li><a href="#SetDestination">Set Destination Dialog</a> – How to set destinations using dropdowns or custom street intersections.</li>
+<li><a href="#InfoBars">Information Bars</a> – Describes the bar under the minimap showing current location, AP cost, and nearby landmarks.</li>
+<li><a href="#Compass_Routes">Compass Routes</a> – Visualizes travel paths using color-coded lines for direct and transit-based routes.</li>
+</ul>
+<p>Together, these tools give you full spatial awareness in RavenBlack City, helping you move with precision, optimize AP usage, and never lose track of where you’re headed.</p>
+</section>
+<section id="MinimapControls" style="display: none;">
+<h2>Minimap Controls</h2>
+<p>The control buttons located above and below the minimap allow you to quickly interact with and refresh the city grid. These controls help you navigate the map, recenter your position, zoom in or out, and open external community resources.</p>
+<img alt="Minimap Controls UI" src="images/Minimap Controls.png" width="500"/>
+<h3>Control Buttons:</h3>
+<ul>
+<li><strong>Zoom In / Out:</strong> Adjusts the zoom level of the minimap grid. Zoom out to see more of the grid. Zoom in to see less of the grid. Available views are 3x3, 5x5 and 7x7.</li>
+<li><strong>Recenter Minimap to Location:</strong> Select the intersection to center the minimap on with the dropdowns and click "Go" to jump to that location.
+  <li><strong>Refresh:</strong> Safely refreshes the game screen and recenters the minimap on your current locatoin.</li>
+<li><strong>Set Destination:</strong> Opens the <a href="#SetDestination">Set Destination Dialog</a> to choose a coordinate or location name as your routing target.</li>
+</li></ul>
+<h3>Community Integration:</h3>
+<ul>
+<li><strong>Discord Button:</strong> Opens the in-app Discord Server List window, showing official and community-run RBC servers. Clicking a server opens its invite link in your browser.</li>
+<li><strong>Website Button:</strong> Opens the RBCMap official webpage or development homepage in your default browser.</li>
+</ul>
+<p>These buttons are always available near the minimap and provide fast access to critical features and external resources without disrupting gameplay.</p>
+</section>
+<section id="Navigating_the_Minimap" style="display: none;">
+<h2>Navigating the Minimap</h2>
+<p>The minimap in RBCMap is interactive and centers your vampire’s movement in real time. It supports simple mouse and menu-based navigation for planning routes and exploring known areas of the grid.</p>
+<img alt="Minimap shown at 3x3 zoom level" src="images/Minimap_Zoom_3.png" width="300"/>
+<h3>Interaction Methods:</h3>
+<ul>
+<li><strong>Click a Tile:</strong> Clicking on any visible grid tile will center the minimap on that tile. This is useful for quickly jumping to a known area or location of interest.</li>
+<li><strong>Dropdown Destination Lists:</strong> Use the dropdown menus below the minimap to select a known location (bank, tavern, guild, power site, etc.). After selecting an entry, click the <strong>Go</strong> button to automatically set that location as your routing destination and center the minimap view on it.</li>
+</ul>
+<h3>Automatic Behavior:</h3>
+<ul>
+<li><strong>Auto Recentering:</strong> After every in-game move, the minimap automatically re-centers on your updated coordinates.</li>
+<li>This ensures your position is always kept in view unless you manually click elsewhere.</li>
+</ul>
+<h3>Nav Lines:</h3>
+<ul>
+<li>Blue: This is the direct route to the nearest Bank.</li>
+<li>Red: This is the direct route to the nearest Transit.</li>
+<li>Gold: This is the direct route to the nearest Tavern.</li>
+<li>Green and Purple: These show the route selected in the <a href="#Compass_Routes">Compass Routes Dialog</a>.</li>
+</ul>This combination of automatic tracking and quick-jump controls makes it easy to follow your movement, plan routes, and review nearby options without losing your place.
+
+</section>
+<section id="Overview" style="display: block;">
+<h2>Overview</h2>
+<p><strong>RBC Community Map</strong> is a companion application for the browser-based vampire game <a href="https://quiz.ravenblack.net/blood.pl">Vampires! The Dark Alleyway</a> by RavenBlack. It enhances city navigation, planning, and multitasking by offering tools the original game does not provide.</p>
+<p>Use RBCMap to explore the city grid, manage characters, access quick tools, customize your interface, and plan your vampire’s next moves more efficiently.</p>
+<h3>Explore the Application</h3>
+<ul>
+<li><a href="#UI_Overview">Main Interface Overview</a> – Learn the structure of the main window and how each section works together.</li>
+<li><a href="#Minimap_and_Information_Bars">Minimap and Information Bars</a> – How to view your location, navigate the grid, and use destination planning tools.</li>
+<li><a href="#MenuItems">Menu Items</a> – Full breakdown of all items in the File, Settings, Tools, Resources, and Help menus.</li>
+<li><a href="#Character_Management">Character Management</a> – Store multiple vampires, auto-login, update passwords, and switch characters easily.</li>
+</ul>
+<p>Each section above includes links to additional features, dialogs, and tools. Use the navigation panel or search to dive deeper into what RBCMap can do for you.</p>
+</section>
+<section id="PowerReference" style="display: none;">
+<h2>Powers Reference</h2>
+<p>The <strong>Powers Reference</strong> dialog provides detailed information on every power available in the game, regardless of whether your vampire currently possesses it. It allows you to review power effects, guild source, coin cost, quest requirements, and—if the guild's location is known—set it as your destination.</p>
+<img alt="Powers Reference Dialog" src="images/Powers Reference.png" width="500"/>
+<h3>Features:</h3>
+<ul>
+<li><strong>Power List:</strong> All current powers are listed on the left side, including all levels (e.g., Locate 1–3, Telepathy 1–3).</li>
+<li><strong>Details Pane:</strong> When a power is selected, the right side displays:
+    <ul>
+<li><strong>Power:</strong> The name of the selected power.</li>
+<li><strong>Guild:</strong> The name of the guild that grants this power.</li>
+<li><strong>Cost:</strong> The number of coins required to purchase it.</li>
+<li><strong>Quest Info:</strong> A brief description of any quest or task needed to unlock it (if applicable).</li>
+<li><strong>Skill Info:</strong> Explains what the power actually does in-game.</li>
+</ul>
+</li>
+<li><strong>Set Destination Button:</strong> If the guild’s location is known in your database, this buttion will be active. Clicking it will instantly set your current destination to that guild’s coordinates.</li>
+</ul>
+<h3>Notes:</h3>
+<ul>
+<li>This tool is for planning and reference purposes only. It does not verify your vampire's current abilities.</li>
+<li>Unknown guild coordinates will deactivate the Set Destination button.</li>
+</ul>
+<p>Use this dialog to plan efficient routes to power-granting guilds and review what’s needed to unlock key abilities in-game.</p>
+</section>
+<section id="Reporting_an_Issue" style="display: none;">
+<h2>Reporting an Issue</h2>
+<p>If you encounter a bug, crash, or unexpected behavior in RBCMap, please report it so we can fix it! Bug reports help improve the application for everyone.</p>
+<p>You can submit issues on GitHub via:</p>
+<p><a href="https://github.com/jelollis/RBC-Map/issues" target="_blank">https://github.com/jelollis/RBC-Map/issues</a> or by clicking "Report an Issue" under the <a href="#HelpMenu">Help Menu</a>.</p>
+<h3>Before You Submit</h3>
+<p>When reporting a problem, please include the following:</p>
+<ul>
+<li><strong>Your log file</strong> – Found at: 
+    <a href="file:///C:/Program Files (x86)/RBC Community Map/logs/" target="_blank">
+      C:\Program Files (x86)\RBC Community Map\logs\
+    </a>
+</li>
+<li><strong>A screenshot</strong> if the issue is visual or UI-related.</li>
+<li><strong>Steps to reproduce</strong> the issue — this is essential for recreating the problem.</li>
+</ul>
+<h3>Bug Report Template</h3>
+<pre>
+**Describe the bug:**
+A clear and concise description of what went wrong.
+
+**Steps to reproduce:**
+1. Go to '...'
+2. Click on '...'
+3. Observe '...'
+
+**Expected behavior:**
+What did you expect to happen instead?
+
+**Screenshot:**
+(Attach a screenshot if applicable)
+
+**Log File:**
+(Attach the log file from: 
+C:\Program Files (x86)\RBC Community Map\logs\ )
+
+**System Info:**
+- OS (Windows 10/11, Linux via Wine, etc.):
+- RBCMap Version (e.g., 0.12.1):
+</pre>
+<p>Thank you for helping make RBCMap better!</p>
+</section>
+<section id="ResourcesMenu" style="display: none;">
+<h2>Resources Menu</h2>
+<p>The <strong>Resources</strong> menu provides quick access to external tools and references related to RavenBlack City. These links open in your system’s default web browser.</p>
+<img alt="Resources Menu" src="images/Resources Menu.png" width="300"/>
+<h3>Available Links:</h3>
+<ul>
+<li><strong><a href="https://aviewinthedark.net/" target="_blank">A View in the Dark (AVITD)</a></strong><br/>
+    This is a community updated public database of known locations of Guilds, Shops and other items found in the city and shared by the finders.
+  </li>
+<li><strong><a href="https://ravenblack.city" target="_blank">RavenBlack City Wiki</a></strong><br/>
+    A modern community-maintained wiki with gameplay mechanics, roleplay lore, clan histories, powers, items, and more.
+  </li>
+</ul>
+<h3>Notes:</h3>
+<ul>
+<li><strong>External content:</strong> These are third-party websites not owned or maintained by the RBCMap team.</li>
+<li>If a link goes down or changes, it will need to be updated in a future app version.</li>
+</ul>
+</section>
+<section id="SetDestination" style="display: none;">
+<h2>Set Destination Dialog</h2>
+<p>The <strong>Set Destination</strong> dialog provides a detailed interface for choosing where to route your vampire. You can select a known location from categorized dropdowns or manually define a custom destination using city street coordinates.</p>
+<img alt="Set Destination Dialog" src="images/Set Destination Dialog.png" width="500"/>
+<h3>Dropdown Menus:</h3>
+<p><em>Only one dropdown can be used at a time unless you're entering a custom location below.</em></p>
+<ul>
+<li><strong>Recent Destinations:</strong> Quick access to places you’ve recently set as a destination.</li>
+<li><strong>Tavern:</strong> A list of all known taverns.</li>
+<li><strong>Bank:</strong> A list of all known bank locations.</li>
+<li><strong>Transit:</strong> All known transit station locations.</li>
+<li><strong>Shop:</strong> All known shops recorded in your local database.</li>
+<li><strong>Guild:</strong> All known guilds recorded in your local database.</li>
+<li><strong>Places of Interest:</strong> Includes special locations like the Graveyard, Hall of Binding, Hall of Severance, and unique or one-off locations that don’t fit elsewhere.</li>
+<li><strong>User Building:</strong> A list of all known player-owned locations.</li>
+</ul>
+<h3>Manual Destination Entry:</h3>
+<p>Define a destination using street intersections and offset direction:</p>
+<ul>
+<li><strong>ABC Street:</strong> Vertical street name</li>
+<li><strong>123 Street:</strong> Horizontal street name</li>
+<li><strong>Direction:</strong> Position relative to the intersection:
+    <ul>
+<li><strong>On:</strong> At the intersection</li>
+<li><strong>East, South East, South:</strong> One cell away from the intersection in that direction</li>
+</ul>
+</li>
+</ul>
+<h3>Buttons:</h3>
+<ul>
+<li><strong>Set:</strong> Sets the chosen destination and updates the minimap path.</li>
+<li><strong>Clear:</strong> Removes the current destination.</li>
+<li><strong>Update Data:</strong> Updates shop and guild data from A View in the Dark (AVITD).</li>
+<li><strong>Cancel:</strong> Closes the dialog without applying changes.</li>
+</ul>
+<p>This dialog gives you full control over navigation and route planning, with support for both structured selection and custom street targeting.</p>
+</section>
+<section id="SettingsMenu" style="display: none;">
+<h2>Settings Menu</h2>
+<p>The <strong>Settings</strong> menu lets you customize the appearance and behavior of RBCMap. From themes and custom CSS to movement controls and log filtering, this menu provides the tools to tailor your experience.</p>
+<img alt="Settings menu dropdown" src="images/Settings Menu.png" width="250"/>
+<h3>Menu Options:</h3>
+<ul>
+<li><strong>Change Theme:</strong> Opens the <a href="#Theme_Customization">Theme Customization Dialog</a> to adjust UI colors, minimap grid overlays, and text display styles.</li>
+<li><strong>CSS Customization:</strong> Opens the <a href="#CSS_Customization">CSS Customization Dialog</a> where you can create, edit, and apply custom webview CSS profiles.</li>
+<li><strong>Zoom In / Zoom Out:</strong> Adjusts the minimap's visible area, changing between zoom levels (e.g., 3x3, 5x5, 7x7).</li>
+<li>
+<strong>Keybindings:</strong> Select how movement keys behave:
+    <ul>
+<li><strong>WASD:</strong> Default movement keys (W = North, A = West, etc.)</li>
+<li><strong>Arrow Keys:</strong> Uses the keyboard arrow keys for movement.</li>
+<li><strong>Off:</strong> Disables keyboard movement entirely.</li>
+</ul>
+<img alt="Keybindings submenu" src="images/Keybindings Menu.png" width="250"/>
+</li>
+<li>
+<strong>Logging Level:</strong> Sets the minimum log severity displayed in the Log Viewer:
+    <ul>
+<li><strong>DEBUG:</strong> Show everything including verbose messages. This is the default setting.</li>
+<li><strong>INFO:</strong> General activity reports.</li>
+<li><strong>WARNING:</strong> Non-breaking issues.</li>
+<li><strong>ERROR:</strong> Problems that prevent features from working.</li>
+<li><strong>CRITICAL:</strong> Severe issues affecting stability.</li>
+<li><strong>OFF:</strong> Disables log output completely.</li>
+</ul>
+<img alt="Logging level submenu" src="images/Logging Menu.png" width="300"/>
+</li>
+</ul>
+<p>These options help personalize your experience, troubleshoot bugs, and fine-tune the app’s interface to your liking.</p>
+</section>
+<section id="ShoppingList" style="display: none;">
+<h2>Shopping List Generator</h2>
+<p>The <strong>Shopping List Generator</strong> helps you calculate and plan coin expenditures before you visit a shop. It allows you to preview shop inventories, adjust for your Charisma level, and total the cost of your purchases. It’s especially helpful before withdrawing coins from the bank.</p>
+<h3>How to Use:</h3>
+<p><strong>Step 1: Select the Shop</strong></p>
+<img alt="Select Shop" src="images/Select Shop.png" width="400"/>
+<p>Choose a shop from the dropdown list. This will load its available inventory.</p>
+<p><strong>Step 2: Select Charisma Level</strong></p>
+<img alt="Select Charisma Level" src="images/Select Charisma.png" width="400"/>
+<p>Select your vampire’s current <em>Charisma</em> level. Item prices will update to reflect any discounts.</p>
+<p><strong>Step 3: Add Items</strong></p>
+<img alt="Enter Quantity" src="images/Add Quantity.png" width="400"/>
+<p>Select an item from the shop list and click <strong>Add Item</strong>. You will be prompted to enter a quantity.</p>
+<p><strong>Step 4: View and Update the List</strong></p>
+<img alt="Shopping List View" src="images/Confirmed Items.png" width="400"/>
+<p>Items will appear in your list with the selected quantity and price per item. The total coin cost will update automatically.</p>
+<p><strong>Step 5: Track Funds</strong></p>
+<p>The status bar at the bottom shows:</p>
+<ul>
+<li><strong>List Total:</strong> Combined cost of all selected items</li>
+<li><strong>Coins in Pocket:</strong> On-hand cash</li>
+<li><strong>Bank:</strong> Stored coins in the bank</li>
+</ul>
+<p><strong>Step 6: Remove Items</strong></p>
+<img alt="Remove Item Prompt" src="images/Remove Item.png" width="400"/>
+<p>Select an item and click <strong>Remove Item</strong>. You'll be prompted to enter how many units to remove from the list.</p>
+<h3>Purpose:</h3>
+<p>This tool is ideal for planning purchases before heading to the shop. It ensures you withdraw the right amount of coins and don’t overspend. A new list will be generated each time the tool is opened.</p>
+</section>
+<section id="Theme_Customization" style="display: none;">
+<h2>Theme Customization Dialog</h2>
+<p>The Theme Customization Dialog lets you personalize the appearance of the RBCMap user interface and minimap elements. Changes are applied in real time and saved automatically.</p>
+<img alt="UI Theme Customization" src="images/UI Theme Customization.png" width="450"/>
+<h3>Interface Color Settings</h3>
+<ul>
+<li><strong>Infobar Colors:</strong> Customize tile highlights for Banks, Taverns, Transit Points, Destinations, and more.</li>
+<li><strong>Route Colors:</strong> Adjust the line color and width for direct and transit-based movement routes.</li>
+<li><strong>Minimap Tint Preview:</strong> Applies your color choices live to preview contrast and readability.</li>
+</ul>
+<img alt="Minimap Theme Customization" src="images/Minimap Theme Customization.png" width="450"/>
+<h3>Minimap Display Options</h3>
+<ul>
+<li><strong>Zoom Label Scaling:</strong> Toggle automatic text resizing at different zoom levels.</li>
+<li><strong>Transit Display:</strong> Enable or disable transit icons and secondary highlights.</li>
+<li><strong>Border/Cell Grid Lines:</strong> Customize edge colors and grid visibility.</li>
+</ul>
+<p>This dialog is ideal for improving visibility or matching your visual preferences. Colors are saved per installation.</p>
+</section>
+<section id="ToolsMenu" style="display: none;">
+<h2>Tools Menu</h2>
+<p>The <strong>Tools</strong> menu provides access to several powerful built-in utilities that enhance gameplay, provide planning support, and offer diagnostic tools.</p>
+<img alt="Tools Menu Options" src="images/Tools Menu.png" width="350"/>
+<h3>Included Tools:</h3>
+<ul>
+<li><a href="#DatabaseViewer">Database Viewer</a> – View and inspect the app's live SQLite database.</li>
+<li><a href="#PowerReference">Powers Reference</a> – See what character powers are available and what destinations they affect.</li>
+<li><a href="#ShoppingList">Shopping List Generator</a> – Track what items your vampire needs based on usage.</li>
+<li><a href="#Damage_Calculator">Damage Calculator</a> – Estimate coin cost to drain blood from another vampire.</li>
+<li><a href="#LogViewer">Log Viewer</a> – Browse detailed logs of application activity and debug info.</li>
+</ul>
+<p>Each tool opens in its own dialog and can be accessed at any time during use.</p>
+</section>
+<section id="UI_Overview" style="display: none;">
+<h2>Main Interface Overview</h2>
+<p>The RBCMap main window is divided into several core components. These sections work together to provide real-time updates on your vampire’s position, allow access to tools, and display your routing path across the city grid.</p>
+<img alt="Main UI Screenshot" src="images/Main UI.png" width="600"/>
+<p>The window includes the menu bar, the webview (where the actual game is embedded), the interactive minimap, character details, tool buttons, and the information bar.</p>
+<p>If you're unfamiliar with the layout, start with:  
+<a href="#Identifying_UI_Parts">Identifying UI Parts</a> – This page shows a fully labeled screenshot of the application and identifies the function of each section.</p>
+<h3>Next Steps:</h3>
+<ul>
+<li>Learn about the <a href="#Minimap_and_Information_Bars">Minimap and Information Bars</a>.</li>
+<li>Explore the <a href="#MenuItems">Menu Items</a> section to see all tools and options available in the top bar.</li>
+<li>Manage vampires with the <a href="#Character_Management">Character Management</a> system.</li>
+</ul>
+</section>
+</main>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  const sections = document.querySelectorAll("main section");
+  const navLinks = document.querySelectorAll("nav a");
+
+  // Initially show only the Overview section
+  sections.forEach(sec => {
+    sec.style.display = sec.id === "Overview" ? "block" : "none";
+  });
+
+  // Handle navigation clicks
+  navLinks.forEach(link => {
+    link.addEventListener("click", function (e) {
+      e.preventDefault();
+      const targetId = this.getAttribute("href").substring(1);
+      const targetSection = document.getElementById(targetId);
+      if (targetSection) {
+        sections.forEach(sec => sec.style.display = "none");
+        targetSection.style.display = "block";
+        targetSection.scrollIntoView({ behavior: "smooth" });
+        history.replaceState(null, "", `#${targetId}`);
+      }
+    });
+  });
+
+  // Handle hash-based direct linking
+  const initialHash = window.location.hash.substring(1);
+  if (initialHash) {
+    const target = document.getElementById(initialHash);
+    if (target) {
+      sections.forEach(sec => sec.style.display = "none");
+      target.style.display = "block";
+      target.scrollIntoView();
+    }
+  }
+});
+</script>
+
+</body></html>
