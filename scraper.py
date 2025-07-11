@@ -87,14 +87,24 @@ class Scraper:
         shops = {}
 
         for loc in data:
-            name = self.normalize_name(loc["building_name"])
-            col = str(loc["coordinate_x"])
-            row = str(loc["coordinate_y"])
+            if not loc.get("is_active"):
+                continue  # Skip inactive reports
+
+            base_name = loc["building_name"].strip()
+            column = str(loc.get("street_number", "")).strip()  # e.g. "95th"
+            row = str(loc.get("street_name", "")).strip()  # e.g. "Pilchard"
             typ = loc["building_type"]
+            level = loc.get("guild_level")
+
+            if not column or not row:
+                logging.warning(f"Skipping location with missing column/row: {loc}")
+                continue
+
             if typ == "guild":
-                guilds[name] = (col, row)
+                full_name = f"{base_name} {level}" if level else base_name
+                guilds[self.normalize_name(full_name)] = (column, row)
             elif typ == "shop":
-                shops[name] = (col, row)
+                shops[self.normalize_name(base_name)] = (column, row)
 
         logging.info(f"Terrible API provided {len(guilds)} guilds and {len(shops)} shops.")
         return {'guilds': guilds, 'shops': shops}
