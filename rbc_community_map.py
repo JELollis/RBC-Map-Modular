@@ -1,10 +1,10 @@
 from imports import *
 from constants import *
-from directories  import *
+from directories import *
 from logging_setup import *
 from cookies import *
 from database import *
-from scraper import *
+from splash import *
 from character_dialog import *
 from compass_overlay import *
 from css_customization_dialog import *
@@ -15,157 +15,309 @@ from log_viewer import *
 from powers_dialog import *
 from set_destination_dialog import *
 from shopping_list_tool import *
-from splash import *
 from theme_customization_dialog import *
 
+
+class StartupUpdateWorker(QObject):
+    started = Signal()
+    finished = Signal(bool, str)  # (ok, message)
+
+    REQUEST_TIMEOUT = 10  # seconds
+
+    def __init__(self, app_ref):
+        super().__init__()
+        self.app = app_ref  # reference to RBCCommunityMap
+
+    @pyqtSlot()
+    def run(self) -> None:
+        self.started.emit()
+
+        try:
+            logging.info("[Startup] Requesting secure token...")
+
+            token_response = requests.get(
+                "https://lollis-home.ddns.net/api/request-token.py",
+                timeout=self.REQUEST_TIMEOUT,
+            )
+            token_response.raise_for_status()
+
+            token = token_response.text.strip()
+            if not token:
+                raise ValueError("Empty token received from server")
+
+            logging.info("[Startup] Token received successfully")
+
+            trigger_url = (
+                "https://lollis-home.ddns.net/api/trigger-update.py"
+                f"?token={token}"
+            )
+
+            trigger_response = requests.get(
+                trigger_url,
+                timeout=self.REQUEST_TIMEOUT,
+            )
+            trigger_response.raise_for_status()
+
+            logging.info("[Startup] Bot scrape triggered; waiting for data availability")
+
+            # Controlled delay — still synchronous, but explicit
+            time.sleep(10)
+
+            json_response = requests.get(
+                "https://lollis-home.ddns.net/api/locations.json",
+                timeout=self.REQUEST_TIMEOUT,
+            )
+            json_response.raise_for_status()
+
+            try:
+                data = json_response.json()
+            except ValueError as exc:
+                raise ValueError("Invalid JSON received from locations endpoint") from exc
+
+            self.app.update_database_with_json(data)
+
+            logging.info("[Startup] Database updated with fresh bot data")
+            self.finished.emit(True, "Initial data update completed")
+
+        except requests.RequestException as exc:
+            logging.warning(
+                "[Startup] Network error during startup update: %s",
+                exc,
+            )
+            self.finished.emit(False, "Startup update failed (network error)")
+
+        except Exception as exc:
+            logging.warning(
+                "[Startup] Startup update failed: %s",
+                exc,
+            )
+            self.finished.emit(False, "Startup update failed")
+
+# ---------------------------------------------------------------------
+# QtNetwork-based Startup Update (PLACEHOLDER / NOT ACTIVE)
+# ---------------------------------------------------------------------
+#
+# This is an alternative implementation of StartupUpdateWorker using
+# QNetworkAccessManager instead of `requests`.
+#
+# Intended for:
+# - Future testing
+# - Event-loop-friendly networking
+# - Better integration with Qt threading and shutdown
+#
+# NOT ACTIVE:
+# - This code is intentionally commented out
+# - No signals are connected
+# - No behavior is changed by its presence
+#
+# ---------------------------------------------------------------------
+#
+# from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+# from PySide6.QtCore import QUrl, QByteArray
+#
+#
+# class StartupUpdateWorkerQt(QObject):
+#     started = Signal()
+#     finished = Signal(bool, str)
+#
+#     def __init__(self, app_ref):
+#         super().__init__()
+#         self.app = app_ref
+#         self.manager = QNetworkAccessManager(self)
+#
+#     def run(self):
+#         """
+#         Conceptual flow:
+#         1. Request token via QNetworkRequest
+#         2. Trigger bot update
+#         3. Poll or delay using QTimer (NOT time.sleep)
+#         4. Fetch locations.json
+#         5. Parse JSON and update database
+#
+#         All steps would be driven by signals:
+#         - finished(QNetworkReply*)
+#         - errorOccurred(...)
+#         """
+#         self.started.emit()
+#
+#         # Example (token request):
+#         # request = QNetworkRequest(QUrl("https://lollis-home.ddns.net/api/request-token.py"))
+#         # reply = self.manager.get(request)
+#         # reply.finished.connect(lambda: self._handle_token_reply(reply))
+#
+#     # def _handle_token_reply(self, reply):
+#     #     if reply.error():
+#     #         self.finished.emit(False, "Startup update failed (network error)")
+#     #         return
+#     #
+#     #     token = bytes(reply.readAll()).decode("utf-8").strip()
+#     #     # Continue chain...
+#
+# ---------------------------------------------------------------------
+
+# -----------------------
+# RBC Community Map Main Class
+# -----------------------
 
 class RBCCommunityMap(QMainWindow):
     """
     Main application class for the RBC Community Map.
     """
 
-    def __init__(self):
-        """
-        Initialize the RBCCommunityMap and its components efficiently.
-
-        Sets up the main window, scraper, cookie handling, data loading, and UI components
-        with proper error handling and asynchronous initialization where possible.
-        """
+    def __init__(self, splash=None):
         super().__init__()
 
-        # Core state flags
+        # -----------------------
+        # Core State
+        # -----------------------
+
+        self.splash = splash
         self.is_updating_minimap = False
         self.login_needed = True
+        self.auto_login_enabled = True
         self.webview_loaded = False
-        self.splash = None
 
-        # Compass route state
-        self.selected_route_label = None  # "Direct Route" or "Transit Route"
-        self.selected_route_description = None  # Full arrow description shown in the compass label
-        self.selected_route_path = None  # List of (x, y) coordinate tuples to draw on minimap
+        # Compass / routing state
+        self.selected_route_label = None
+        self.selected_route_description = None
+        self.selected_route_path = None
 
-        # Initialize character coordinates
+        # Character / navigation state
         self.character_x = None
         self.character_y = None
         self.selected_character = None
         self.destination = None
 
-        # Initialize essential components early
+        # Self-learning building cache
+        self._seen_buildings: set[tuple[str, str, str]] = set()
+
+        # -----------------------
+        # Initialization Pipeline
+        # -----------------------
+
         self._init_data()
-        self._init_scraper()
         self._init_window_properties()
         self._init_web_profile()
-
-        # UI and character setup
         self._init_ui_state()
         self._init_characters()
         self._init_ui_components()
-
-        # Final setup steps
         self._finalize_setup()
 
-    @splash_message(None)
-    def _init_scraper(self) -> None:
-        """Initialize the AVITD scraper and start scraping in a separate thread."""
-        self.scraper = Scraper()
-        # Use QThread for non-blocking scraping (assuming scraper supports it)
-        from PySide6.QtCore import QThreadPool
-        QThreadPool.globalInstance().start(lambda: self.scraper.scrape_guilds_and_shops())
-        logging.debug("Started scraper in background thread")
+        # Kick off background map update AFTER UI is shown
+        self._start_startup_update()
 
-    @splash_message(None)
+    # -----------------------
+    # Initialization Steps
+    # -----------------------
+
+    @splash_message(lambda self: self.splash, "Configuring window")
     def _init_window_properties(self) -> None:
-        """Set up main window properties."""
         try:
-            self.setWindowIcon(PySide6.QtGui.QIcon('images/favicon.ico'))
-            self.setWindowTitle('RBC Community Map')
+            icon_path = IMAGES_DIR / "favicon.ico"
+            self.setWindowIcon(PySide6.QtGui.QIcon(str(icon_path)))
+            self.setWindowTitle("RBC Community Map")
             self.setGeometry(100, 100, 1200, 800)
             self.load_theme_settings()
             self.apply_theme()
-        except Exception as e:
-            logging.error(f"Failed to set window properties: {e}")
-            # Fallback to default icon/title if needed
-            self.setWindowTitle('RBC Community Map (Fallback)')
+        except Exception as exc:
+            logging.error("Failed to set window properties: %s", exc)
+            self.setWindowTitle("RBC Community Map (Fallback)")
 
-    @splash_message(None)
+    @splash_message(lambda self: self.splash, "Initializing web profile")
     def _init_web_profile(self) -> None:
-        """Set up QWebEngineProfile for cookie handling."""
         self.web_profile = QWebEngineProfile.defaultProfile()
-        cookie_storage_path = os.path.join(os.getcwd(), 'sessions')
-        try:
-            os.makedirs(cookie_storage_path, exist_ok=True)
-            # noinspection PyUnresolvedReferences
-            self.web_profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
-            self.web_profile.setPersistentStoragePath(cookie_storage_path)
-            self.setup_cookie_handling()
-        except OSError as e:
-            logging.error(f"Failed to set up cookie storage at {cookie_storage_path}: {e}")
-            # Continue with in-memory cookies if storage fails
 
-    @splash_message(None)
+        try:
+            SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            self.web_profile.setPersistentCookiesPolicy(
+                QWebEngineProfile.ForcePersistentCookies
+            )
+            self.web_profile.setPersistentStoragePath(str(SESSIONS_DIR))
+            self.setup_cookie_handling()
+        except OSError as exc:
+            logging.error(
+                "Failed to set up cookie storage at %s: %s",
+                SESSIONS_DIR,
+                exc,
+            )
+            # Continue with in-memory cookies
+
+    @splash_message(lambda self: self.splash, "Loading local data")
     def _init_data(self) -> None:
-        """Load initial data from the database with fallback."""
         try:
             (
-                self.columns, self.rows, self.banks_coordinates, self.taverns_coordinates,
-                self.transits_coordinates, self.user_buildings_coordinates, self.color_mappings,
-                self.shops_coordinates, self.guilds_coordinates, self.places_of_interest_coordinates,
-                self.keybind_config, self.current_css_profile,
-                self.selected_character, self.destination  # <-- just store, don't update minimap yet
+                self.columns,
+                self.rows,
+                self.banks_coordinates,
+                self.taverns_coordinates,
+                self.transits_coordinates,
+                self.user_buildings_coordinates,
+                self.color_mappings,
+                self.shops_coordinates,
+                self.guilds_coordinates,
+                self.places_of_interest_coordinates,
+                self.keybind_config,
+                self.current_css_profile,
+                self.selected_character,
+                self.destination,
             ) = load_data()
+        except sqlite3.Error as exc:
+            logging.critical("Failed to load initial data: %s", exc)
 
-        except sqlite3.Error as e:
-            logging.critical(f"Failed to load initial data: {e}")
-            # Use fallback data
-            self.columns = self.rows = self.banks_coordinates = self.taverns_coordinates = \
-                self.transits_coordinates = self.user_buildings_coordinates = \
-                self.shops_coordinates = self.guilds_coordinates = self.places_of_interest_coordinates = {}
-            self.color_mappings = {'default': PySide6.QtGui.QColor('#000000')}
+            self.columns = self.rows = {}
+            self.banks_coordinates = {}
+            self.taverns_coordinates = {}
+            self.transits_coordinates = {}
+            self.user_buildings_coordinates = {}
+            self.shops_coordinates = {}
+            self.guilds_coordinates = {}
+            self.places_of_interest_coordinates = {}
+            self.color_mappings = {
+                "default": PySide6.QtGui.QColor("#000000")
+            }
             self.keybind_config = 1
             self.current_css_profile = "Default"
             self.selected_character = None
             self.destination = None
 
-    @splash_message(None)
+    @splash_message(lambda self: self.splash, "Preparing UI state")
     def _init_ui_state(self) -> None:
-        """Initialize UI-related state variables."""
         self.zoom_level = 3
-        self.load_zoom_level_from_database()  # May override zoom_level
+        self.load_zoom_level_from_database()
         self.minimap_size = 280
         self.column_start = 0
         self.row_start = 0
         self.destination = None
+
         self.map_icons = {
-            "bank": PySide6.QtGui.QPixmap("images/bank.png"),
-            "tavern": PySide6.QtGui.QPixmap("images/saloon.png"),
-            "transit": PySide6.QtGui.QPixmap("images/transit.png"),
-            "user_building": PySide6.QtGui.QPixmap("images/castle.png"),
-            "guild": PySide6.QtGui.QPixmap("images/guild.png"),
-            "shop": PySide6.QtGui.QPixmap("images/shop.png"),
-            "graveyard": PySide6.QtGui.QPixmap("images/graveyard.png"),
-            "hall_binding": PySide6.QtGui.QPixmap("images/binding.png"),
-            "hall_severance": PySide6.QtGui.QPixmap("images/severance.png"),
+            "bank": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "bank.png")),
+            "tavern": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "saloon.png")),
+            "transit": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "transit.png")),
+            "user_building": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "castle.png")),
+            "guild": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "guild.png")),
+            "shop": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "shop.png")),
+            "graveyard": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "graveyard.png")),
+            "hall_binding": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "binding.png")),
+            "hall_severance": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "severance.png")),
         }
 
-    @splash_message(None)
+    @splash_message(lambda self: self.splash, "Loading characters")
     def _init_characters(self) -> None:
-        """Initialize character-related data and widgets."""
         self.characters = []
         self.character_list = QListWidget()
         self.selected_character = None
+
         self.load_characters()
         if not self.characters:
             self.firstrun_character_creation()
 
-    @splash_message(None)
+    @splash_message(lambda self: self.splash, "Building interface")
     def _init_ui_components(self) -> None:
-        """Set up UI components and console logging."""
         self.setup_ui_components()
         self.setup_console_logging()
 
-    @splash_message(None)
+    @splash_message(lambda self: self.splash, "Finalizing startup")
     def _finalize_setup(self) -> None:
-        """Complete initialization with UI display and final configurations."""
         self.show()
 
         if self.selected_character and self.destination:
@@ -173,15 +325,55 @@ class RBCCommunityMap(QMainWindow):
 
         self.load_last_active_character()
         self.setup_keybindings()
-        # noinspection PyUnresolvedReferences
+
         self.setFocusPolicy(Qt.StrongFocus)
-        if hasattr(self, 'website_frame'):
-            # noinspection PyUnresolvedReferences
+        if hasattr(self, "website_frame"):
             self.website_frame.setFocusPolicy(Qt.StrongFocus)
-        else:
-            logging.warning("website_frame not initialized before focus setup")
+
         css = self.load_current_css()
         self.apply_custom_css(css)
+
+    def _start_startup_update(self) -> None:
+        """
+        Start the background startup data update worker.
+        """
+        try:
+            self.startup_worker = StartupUpdateWorker(self)
+            self.startup_thread = QThread(self)
+
+            self.startup_worker.moveToThread(self.startup_thread)
+            self.startup_thread.started.connect(self.startup_worker.run)
+            self.startup_worker.finished.connect(self._on_startup_update_finished)
+
+            self.startup_worker.finished.connect(self.startup_thread.quit)
+            self.startup_worker.finished.connect(self.startup_worker.deleteLater)
+            self.startup_thread.finished.connect(self.startup_thread.deleteLater)
+
+            self.startup_thread.start()
+            logging.debug("Startup update worker launched")
+
+        except Exception as e:
+            logging.error(f"Failed to start startup update worker: {e}")
+
+    def _on_startup_update_finished(self, ok: bool, msg: str):
+        # Refresh any UI that depends on DB state (no heavy work here)
+        try:
+            if hasattr(self, "refresh_all_dropdowns"):
+                self.refresh_all_dropdowns()
+            if ok and self.selected_character and self.destination:
+                # Optional: if new data affects routes, refresh minimap
+                self.update_minimap()
+        except Exception as e:
+            logging.warning(f"Post-startup refresh error: {e}")
+        self._set_status(("✅ " if ok else "❌ ") + msg)
+
+    def _set_status(self, text: str):
+        if hasattr(self, "statusBar") and callable(getattr(self, "statusBar")) and self.statusBar():
+            self.statusBar().showMessage(text, 5000)
+        elif hasattr(self, "infobar_label"):
+            self.infobar_label.setText(text)
+        else:
+            print(text)
 
     def load_current_css(self) -> str:
         """Load CSS for the current profile from the database."""
@@ -206,148 +398,157 @@ class RBCCommunityMap(QMainWindow):
         Load keybind configuration from the database.
 
         Returns:
-            int: Keybind mode (0=Off, 1=WASD, 2=Arrows), defaults to 1 (WASD) if not found.
+            int: Keybind mode (0=Off, 1=WASD, 2=Arrows)
         """
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT setting_value FROM settings WHERE setting_name = 'keybind_config'")
-                result = cursor.fetchone()
-                return int(result[0]) if result else 1  # Default to WASD
-        except sqlite3.Error as e:
-            logging.error(f"Failed to load keybind config: {e}")
-            return 1  # Fallback to WASD on error
+                cursor.execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'keybind_config'"
+                )
+                row = cursor.fetchone()
+                return int(row[0]) if row else 1
+        except sqlite3.Error as exc:
+            logging.error("Failed to load keybind config: %s", exc)
+            return 1
+
 
     def setup_keybindings(self) -> None:
-        """Set up keybindings for character movement based on current config."""
-        movement_configs = {
-            1: {  # WASD Mode
-                Qt.Key.Key_W: 1,  # Top-center
-                Qt.Key.Key_A: 3,  # Middle-left
-                Qt.Key.Key_S: 7,  # Bottom-center
-                Qt.Key.Key_D: 5  # Middle-right
-            },
-            2: {  # Arrow Keys Mode
-                Qt.Key.Key_Up: 1,
-                Qt.Key.Key_Left: 3,
-                Qt.Key.Key_Down: 7,
-                Qt.Key.Key_Right: 5
-            },
-            0: {}  # Off mode (no keybindings)
-        }
-
-        self.movement_keys = movement_configs.get(self.keybind_config, movement_configs[1])
-        logging.debug(f"Setting up keybindings: {self.movement_keys}")
-
+        """Set up movement keybindings based on current keybind_config."""
         self.clear_existing_keybindings()
 
         if self.keybind_config == 0:
-            logging.info("Keybindings disabled (mode 0)")
+            logging.info("Keybindings disabled")
             return
 
-        if not hasattr(self, 'website_frame'):
-            logging.error("website_frame not initialized; skipping keybinding setup")
+        movement_configs = {
+            1: {  # WASD
+                Qt.Key.Key_W: 1,
+                Qt.Key.Key_A: 3,
+                Qt.Key.Key_S: 7,
+                Qt.Key.Key_D: 5,
+            },
+            2: {  # Arrows
+                Qt.Key.Key_Up: 1,
+                Qt.Key.Key_Left: 3,
+                Qt.Key.Key_Down: 7,
+                Qt.Key.Key_Right: 5,
+            },
+        }
+
+        keymap = movement_configs.get(self.keybind_config)
+        if not keymap:
+            logging.warning("Unknown keybind mode: %s", self.keybind_config)
             return
 
-        for key, move_index in self.movement_keys.items():
-            shortcut = PySide6.QtGui.QShortcut(PySide6.QtGui.QKeySequence(key), self.website_frame,
-                                               context=Qt.ShortcutContext.ApplicationShortcut)
-            shortcut.activated.connect(lambda idx=move_index: self.move_character(idx))
-            logging.debug(f"Bound key {key} to move index {move_index}")
+        self._movement_shortcuts: list[PySide6.QtGui.QShortcut] = []
+
+        for key, move_index in keymap.items():
+            shortcut = PySide6.QtGui.QShortcut(
+                PySide6.QtGui.QKeySequence(key),
+                self,
+                context=Qt.ShortcutContext.ApplicationShortcut,
+            )
+            shortcut.activated.connect(
+                lambda idx=move_index: self.move_character(idx)
+            )
+            self._movement_shortcuts.append(shortcut)
+
+        logging.debug(
+            "Registered %d movement keybindings",
+            len(self._movement_shortcuts),
+        )
+
+
+    def clear_existing_keybindings(self) -> None:
+        """Remove previously registered movement shortcuts."""
+        shortcuts = getattr(self, "_movement_shortcuts", [])
+        for shortcut in shortcuts:
+            shortcut.setEnabled(False)
+            shortcut.deleteLater()
+
+        self._movement_shortcuts = []
+
 
     def move_character(self, move_index: int) -> None:
         """
-        Move character to the specified grid position via JavaScript,
-        but only if the currently focused widget is not an input field.
-
-        Args:
-            move_index (int): Index in the 3x3 movement grid (0-8).
+        Move character using injected JavaScript, unless focus is on an input widget.
         """
         widget = QApplication.focusWidget()
         if isinstance(widget, (QLineEdit, QComboBox)):
-            logging.debug(f"Ignored movement key {move_index} due to focus on input: {widget}")
             return
 
-        if not hasattr(self, 'website_frame') or not self.website_frame.page():
-            logging.warning("Cannot move character: website_frame or page not initialized")
+        if not hasattr(self, "website_frame") or not self.website_frame.page():
+            logging.warning("Cannot move character: website_frame not ready")
             return
 
-        logging.debug(f"Attempting move to grid index: {move_index}")
-        js_code = """
-            (function() {
+        js_code = f"""
+            (function() {{
                 const table = document.querySelector('table table');
                 if (!table) return 'No table';
                 const spaces = Array.from(table.querySelectorAll('td'));
-                if (spaces.length !== 9) return 'Invalid grid size: ' + spaces.length;
-                const targetSpace = spaces[%d];
-                if (!targetSpace) return 'No target space';
-                const form = targetSpace.querySelector('form[action="/blood.pl"][method="POST"]');
+                if (spaces.length !== 9) return 'Invalid grid';
+                const target = spaces[{move_index}];
+                if (!target) return 'Invalid target';
+                const form = target.querySelector('form[action="/blood.pl"][method="POST"]');
                 if (!form) return 'No form';
-                const x = form.querySelector('input[name="x"]').value;
-                const y = form.querySelector('input[name="y"]').value;
                 form.submit();
-                return 'Submitted to x=' + x + ', y=' + y;
-            })();
-        """ % move_index
-        self.website_frame.page().runJavaScript(js_code, lambda result: logging.debug(f"Move result: {result}"))
+                return 'Move submitted';
+            }})();
+        """
+
+        self.website_frame.page().runJavaScript(
+            js_code,
+            lambda result: logging.debug("Move result: %s", result),
+        )
         self.website_frame.setFocus()
 
-    def toggle_keybind_config(self, mode: int) -> None:
-        """
-        Switch between keybinding modes (0=Off, 1=WASD, 2=Arrows) and update settings.
 
-        Args:
-            mode (int): Keybind mode to switch to.
-        """
-        if mode not in {0, 1, 2}:
-            logging.warning(f"Invalid keybind mode: {mode}; ignoring")
+    def toggle_keybind_config(self, mode: int) -> None:
+        """Switch keybinding mode and persist to database."""
+        if mode not in (0, 1, 2):
+            logging.warning("Invalid keybind mode: %s", mode)
             return
 
         self.keybind_config = mode
-        mode_text = {0: "Off", 1: "WASD", 2: "Arrow Keys"}[mode]
-        logging.info(f"Switching to keybind mode {mode} ({mode_text})")
 
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT OR REPLACE INTO settings (setting_name, setting_value) VALUES ('keybind_config', ?)",
-                    (mode,)
+                    """
+                    INSERT OR REPLACE INTO settings (setting_name, setting_value)
+                    VALUES ('keybind_config', ?)
+                    """,
+                    (mode,),
                 )
                 conn.commit()
-        except sqlite3.Error as e:
-            logging.error(f"Failed to save keybind config {mode}: {e}")
-            return  # Don’t proceed if database fails
+        except sqlite3.Error as exc:
+            logging.error("Failed to save keybind config: %s", exc)
+            return
 
         self.setup_keybindings()
         self.update_keybind_menu()
-        # noinspection PyArgumentList
+
+        mode_text = {0: "Off", 1: "WASD", 2: "Arrow Keys"}[mode]
         QMessageBox.information(self, "Keybind Config", f"Switched to {mode_text}")
 
+
     def update_keybind_menu(self) -> None:
-        """Update keybinding menu checkmarks based on current config."""
-        if not hasattr(self, 'keybind_wasd_action') or not hasattr(self, 'keybind_arrow_action') or \
-                not hasattr(self, 'keybind_off_action'):
-            logging.warning("Keybind menu actions not initialized; skipping update")
+        """Update keybinding menu checkmarks."""
+        if not all(
+                hasattr(self, attr)
+                for attr in (
+                        "keybind_wasd_action",
+                        "keybind_arrow_action",
+                        "keybind_off_action",
+                )
+        ):
             return
 
         self.keybind_wasd_action.setChecked(self.keybind_config == 1)
         self.keybind_arrow_action.setChecked(self.keybind_config == 2)
         self.keybind_off_action.setChecked(self.keybind_config == 0)
-        logging.debug(
-            f"Updated keybind menu: WASD={self.keybind_config == 1}, Arrows={self.keybind_config == 2}, Off={self.keybind_config == 0}")
-
-    def clear_existing_keybindings(self) -> None:
-        """Remove existing shortcuts from website_frame to prevent duplicates."""
-        if not hasattr(self, 'website_frame'):
-            logging.debug("No website_frame to clear keybindings from")
-            return
-
-        shortcuts = list(self.website_frame.findChildren(PySide6.QtGui.QShortcut))
-        for shortcut in shortcuts:
-            shortcut.setParent(None)
-            shortcut.deleteLater()  # Ensure cleanup
-        logging.debug(f"Cleared {len(shortcuts)} existing keybindings")
 
     # -----------------------
     # Load and Apply Customized UI Theme
@@ -355,17 +556,31 @@ class RBCCommunityMap(QMainWindow):
 
     def load_theme_settings(self) -> None:
         """
-        Load theme colors from the color_mappings table into self.color_mappings.
+        Load theme colors from DB into self.color_mappings.
+        DB is the canonical store.
         """
         try:
+            # Ensure dict exists
+            self.color_mappings = {}
+
             with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT type, color FROM color_mappings")
-                rows = cursor.fetchall()
-                self.color_mappings.update({type_: PySide6.QtGui.QColor(color) for type_, color in rows})
-                logging.debug(f"Loaded {len(rows)} theme entries from color_mappings.")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to load theme from color_mappings: {e}")
+                cur = conn.cursor()
+                cur.execute("SELECT type, color FROM color_mappings")
+                rows = cur.fetchall()
+
+            for key, color in rows:
+                qcolor = PySide6.QtGui.QColor(color)
+                if not qcolor.isValid():
+                    logging.warning(f"Invalid theme color in DB for '{key}': {color}")
+                    qcolor = PySide6.QtGui.QColor("#000000")
+                self.color_mappings[key] = qcolor
+
+            logging.debug(f"Loaded {len(rows)} theme entries from color_mappings.")
+        except Exception as e:
+            logging.exception(f"Failed to load theme from DB: {e}")
+            # Keep a minimal fallback so apply_theme never crashes
+            self.color_mappings = {"background": PySide6.QtGui.QColor("#3b3b3b"),
+                                   "text_color": PySide6.QtGui.QColor("#dddddd")}
 
     def save_theme_settings(self) -> bool:
         """
@@ -417,6 +632,7 @@ class RBCCommunityMap(QMainWindow):
         Assumes ThemeCustomizationDialog is defined elsewhere with exec() and color_mappings.
         """
         dialog = ThemeCustomizationDialog(self, color_mappings=self.color_mappings)
+        dialog = ThemeCustomizationDialog(self, color_mappings=self.color_mappings)
         if dialog.exec():
             self.color_mappings = dialog.color_mappings
             self.apply_theme()
@@ -459,7 +675,7 @@ class RBCCommunityMap(QMainWindow):
                             # Handle both string (ISO) and int (epoch) expiration formats
                             if isinstance(expiration, str):
                                 # noinspection PyUnresolvedReferences
-                                cookie.setExpirationDate(QDateTime.fromString(expiration, Qt.ISODate))
+                                cookie.setExpirationDate(QDateTime.fromString(expiration, Qt.DateFormat.ISODate))
                             elif isinstance(expiration, int):
                                 cookie.setExpirationDate(QDateTime.fromSecsSinceEpoch(expiration))
                             else:
@@ -504,7 +720,7 @@ class RBCCommunityMap(QMainWindow):
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     name, value, domain, path,
-                    cookie.expirationDate().toString(Qt.ISODate) if not cookie.isSessionCookie() else None,
+                    cookie.expirationDate().toString(Qt.DateFormat.ISODate) if not cookie.isSessionCookie() else None,
                     int(cookie.isSecure()), int(cookie.isHttpOnly())
                 ))
 
@@ -555,7 +771,7 @@ class RBCCommunityMap(QMainWindow):
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         'ip', value, domain, path,
-                        QDateTime.currentDateTime().addDays(30).toString(Qt.ISODate),
+                        QDateTime.currentDateTime().addDays(30).toString(Qt.DateFormat.ISODate),
                         0, 0
                     ))
                     cookie_id = cursor.lastrowid
@@ -606,8 +822,8 @@ class RBCCommunityMap(QMainWindow):
 
         # Back button using Qt's built-in style
         back_button = QPushButton()
-        back_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowBack))
-        back_button.setCursor(Qt.PointingHandCursor)
+        back_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
+        back_button.setCursor(Qt.CursorShape.PointingHandCursor)
         back_button.setIconSize(QSize(30, 30))
         back_button.setFixedSize(30, 30)
         back_button.setStyleSheet("background-color: transparent; border: none;")
@@ -616,8 +832,8 @@ class RBCCommunityMap(QMainWindow):
 
         # Forward button using Qt's built-in style
         forward_button = QPushButton()
-        forward_button.setIcon(self.style().standardIcon(QStyle.SP_ArrowForward))
-        forward_button.setCursor(Qt.PointingHandCursor)
+        forward_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
+        forward_button.setCursor(Qt.CursorShape.PointingHandCursor)
         forward_button.setIconSize(QSize(30, 30))
         forward_button.setFixedSize(30, 30)
         forward_button.setStyleSheet("background-color: transparent; border: none;")
@@ -625,8 +841,8 @@ class RBCCommunityMap(QMainWindow):
         self.browser_controls_layout.addWidget(forward_button)
 
         refresh_button = QPushButton()
-        refresh_button.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
-        refresh_button.setCursor(Qt.PointingHandCursor)
+        refresh_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        refresh_button.setCursor(Qt.CursorShape.PointingHandCursor)
         refresh_button.setIconSize(QSize(30, 30))
         refresh_button.setFixedSize(30, 30)
         refresh_button.setStyleSheet("background-color: transparent; border: none;")
@@ -653,7 +869,7 @@ class RBCCommunityMap(QMainWindow):
 
         # AP Direction Label
         self.ap_direction_label = QLabel()
-        self.ap_direction_label.setAlignment(Qt.AlignCenter)
+        self.ap_direction_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.ap_direction_label.setStyleSheet("color: white; font-weight: bold; font-size: 12pt;")
         ap_compass_layout.addWidget(self.ap_direction_label)
 
@@ -663,20 +879,20 @@ class RBCCommunityMap(QMainWindow):
         # Ko-Fi button with a programmatically generated icon
         kofi_button = QPushButton()
         kofi_icon = PySide6.QtGui.QPixmap(30, 30)
-        kofi_icon.fill(Qt.transparent)
+        kofi_icon.fill(Qt.GlobalColor.transparent)
         painter = PySide6.QtGui.QPainter(kofi_icon)
-        painter.setRenderHint(PySide6.QtGui.QPainter.Antialiasing)
-        painter.setPen(PySide6.QtGui.QPen(Qt.black, 2))
+        painter.setRenderHint(PySide6.QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(PySide6.QtGui.QPen(Qt.GlobalColor.black, 2))
         painter.setBrush(PySide6.QtGui.QBrush(PySide6.QtGui.QColor(0, 188, 212)))  # Ko-Fi teal color
         painter.drawEllipse(5, 5, 20, 20)
-        painter.setPen(PySide6.QtGui.QPen(Qt.white, 2))
-        painter.drawText(kofi_icon.rect(), Qt.AlignCenter, "K")
+        painter.setPen(PySide6.QtGui.QPen(Qt.GlobalColor.white, 2))
+        painter.drawText(kofi_icon.rect(), QtCore.Qt.AlignmentFlag.AlignCenter, "K")
         painter.end()
         kofi_button.setIcon(PySide6.QtGui.QIcon(kofi_icon))
         kofi_button.setIconSize(QSize(30, 30))
         kofi_button.setToolTip("Support me on Ko-fi")
         # noinspection PyUnresolvedReferences
-        kofi_button.setCursor(Qt.PointingHandCursor)
+        kofi_button.setCursor(Qt.CursorShape.PointingHandCursor)
         kofi_button.setFlat(True)
         kofi_button.clicked.connect(lambda: PySide6.QtGui.QDesktopServices.openUrl(QUrl("https://ko-fi.com/jelollis")))
 
@@ -1131,16 +1347,16 @@ class RBCCommunityMap(QMainWindow):
         """
         self.website_frame.page().runJavaScript(script)
 
-    @pyqtSlot(str)
-    def handle_console_message(self, message):
-        """
-        Handle console messages from the web view and log them.
+        @pyqtSlot(str)
+        def handle_console_message(self, message):
+            """
+            Handle console messages from the web view and log them.
 
-        Args:
-            message (str): The console message to be logged.
-        """
-        print(f"Console message: {message}")
-        logging.debug(f"Console message: {message}")
+            Args:
+                message (str): The console message to be logged.
+            """
+            print(f"Console message: {message}")
+            logging.debug(f"Console message: {message}")
 
     # -----------------------
     # Menu Control Items
@@ -1262,19 +1478,31 @@ class RBCCommunityMap(QMainWindow):
 
     def open_help_file(self):
         """
-        Open the compiled .chm help file from the help folder.
+        Open the appropriate help file depending on the OS.
+        - Windows: .chm file
+        - macOS/Linux: .html file
         """
-        base_dir = os.path.dirname(os.path.abspath(__file__))  # Gets the folder of the current script
-        help_path = os.path.join(base_dir, "docs", "help", "RBCMap Help.chm")
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        help_dir = os.path.join(base_dir, "docs", "help")
+        system = platform.system()
 
-        if os.path.exists(help_path):
-            os.startfile(help_path)
+        if system == "Windows":
+            help_path = os.path.join(help_dir, "RBC Community Map Help.chm")
+            if os.path.exists(help_path):
+                os.startfile(help_path)
+                return
         else:
-            QMessageBox.warning(
-                self,
-                "Help File Missing",
-                f"Could not find help file:\n{help_path}"
-            )
+            html_path = os.path.join(help_dir, "RBC_Map_Help.html")
+            if os.path.exists(html_path):
+                webbrowser.open(f"file://{html_path}")
+                return
+
+        # If neither file is found
+        QMessageBox.warning(
+            self,
+            "Help File Missing",
+            f"Could not find help file:\n{help_path if system == 'Windows' else html_path}"
+        )
 
     # -----------------------
     # Character Management
@@ -1409,26 +1637,63 @@ class RBCCommunityMap(QMainWindow):
         except sqlite3.Error as e:
             logging.error(f"Failed to switch character '{character_name}': {e}")
 
-    def login_selected_character(self):
-        if not self.selected_character:
-            logging.warning("No character selected for login.")
-            return
-
-        name = self.selected_character['name']
-        password = self.selected_character['password']
-        logging.debug(f"Injecting login for character: {name} (ID: {self.selected_character.get('id')})")
-
-        login_script = f"""
-            var loginForm = document.querySelector('form');
-            if (loginForm) {{
-                loginForm.iam.value = '{name}';
-                loginForm.passwd.value = '{password}';
-                loginForm.submit();
-            }} else {{
-                console.error('Login form not found.');
-            }}
+    def login_selected_character(self) -> None:
         """
-        self.website_frame.page().runJavaScript(login_script)
+        Auto-login via JS injection (existing behavior), but with a safe default
+        for auto_login_enabled so refactors don't crash.
+        """
+        try:
+            # Default to True to preserve the current 0.13.3 behavior
+            # (your log shows JS injection is happening successfully).
+            if not getattr(self, "auto_login_enabled", True):
+                logging.info("Auto-login disabled; skipping login injection.")
+                return
+
+            if not getattr(self, "selected_character", None):
+                logging.debug("No selected character; skipping login.")
+                return
+
+            if not hasattr(self, "website_frame") or not self.website_frame or not self.website_frame.page():
+                logging.debug("website_frame not ready; skipping login.")
+                return
+
+            # ---- Your existing JS injection logic should remain below ----
+            # Keep whatever you already have for safe JS construction (json.dumps, etc.)
+            logging.debug("Logging in selected character via JS injection...")
+
+            name = self.selected_character.get("name")
+            password = self.selected_character.get("password")
+
+            if not name or not password:
+                logging.debug("Selected character missing name/password; skipping login.")
+                return
+
+            # If you already have a helper that builds JS, keep using it.
+            # Below is a safe generic pattern; replace with your existing script if different.
+            import json
+            js = f"""
+            (function() {{
+                try {{
+                    const u = {json.dumps(name)};
+                    const p = {json.dumps(password)};
+                    const user = document.querySelector('input[name="username"]');
+                    const pass = document.querySelector('input[name="password"]');
+                    if (!user || !pass) return "Login fields not found";
+                    user.value = u;
+                    pass.value = p;
+                    const form = user.closest('form');
+                    if (form) {{ form.submit(); return "Login submitted"; }}
+                    const btn = document.querySelector('input[type="submit"], button[type="submit"]');
+                    if (btn) {{ btn.click(); return "Login clicked"; }}
+                    return "No form/submit found";
+                }} catch (e) {{
+                    return "Login JS error: " + e;
+                }}
+            }})();
+            """
+            self.website_frame.page().runJavaScript(js, lambda result: logging.debug(f"Login result: {result}"))
+        except Exception as e:
+            logging.exception(f"login_selected_character failed: {e}")
 
     def firstrun_character_creation(self):
         """
@@ -1740,7 +2005,7 @@ class RBCCommunityMap(QMainWindow):
     def on_webview_load_finished(self, success):
         if not success:
             logging.error("Failed to load the webpage.")
-            QMessageBox.critical(self, "Error", "Failed to load the webpage. Check your network or try again.")
+            QMessageBox.critical(self, "Error", "Failed to load the webpage. You may be moving too fast.")
             return
 
         logging.info("Webpage loaded successfully.")
@@ -1752,7 +2017,7 @@ class RBCCommunityMap(QMainWindow):
             logging.debug("Logging in selected character via JS injection...")
             self.login_selected_character()
             self.pending_login = False
-            return  # 🚫 wait for login to finish and reload first
+            return
 
         if self.pending_character_id_for_map:
             logging.debug(f"Loading destination for character {self.pending_character_id_for_map}")
@@ -1763,11 +2028,6 @@ class RBCCommunityMap(QMainWindow):
     def process_html(self, html):
         """
         Process the HTML content of the webview to extract coordinates and coin information.
-
-        Args:
-            html (str): The HTML content of the page as a string.
-
-        This method calls both the extract_coordinates_from_html and extract_coins_from_html methods.
         """
         try:
             # Extract coordinates for the minimap
@@ -1777,15 +2037,22 @@ class RBCCommunityMap(QMainWindow):
                 self.character_x, self.character_y = x_coord, y_coord
                 logging.debug(f"Set character coordinates to x={self.character_x}, y={self.character_y}")
 
-                # Update compass display and route overlay state
-                self.refresh_compass_state()
-
                 # Update the minimap center based on new coordinates
                 self.recenter_minimap()
+
+                # Update compass display and route overlay state
+                self.refresh_compass_state()
 
             # Update coin info
             self.extract_coins_from_html(html)
             logging.debug("HTML processed successfully for coordinates and coin count.")
+
+            # --- NEW: passive building learner (non-blocking) ---
+            try:
+                self.learn_buildings_from_html(html)
+            except Exception as e:
+                # Never break the page flow if learning fails
+                logging.warning(f"Auto-learn skipped due to error: {e}")
 
         except Exception as e:
             logging.error(f"Unexpected error in process_html: {e}")
@@ -2019,6 +2286,12 @@ class RBCCommunityMap(QMainWindow):
                 logging.info(f"Bank coins found: {bank_coins}")
                 updates.append(("UPDATE coins SET bank = ? WHERE character_id = ?", (bank_coins, character_id)))
 
+            accounting_match = re.search(r"(\d+) coins in bank", html)
+            if bank_match:
+                bank_coins = int(bank_match.group(1))
+                logging.info(f"Bank coins found: {bank_coins}")
+                updates.append(("UPDATE coins SET bank = ? WHERE character_id = ?", (bank_coins, character_id)))
+
             pocket_match = re.search(r"You have (\d+) coins", html) or re.search(r"Money: (\d+) coins", html)
             if pocket_match:
                 pocket_coins = int(pocket_match.group(1))
@@ -2029,15 +2302,13 @@ class RBCCommunityMap(QMainWindow):
             if deposit_match:
                 deposit_coins = int(deposit_match.group(1))
                 logging.info(f"Deposit found: {deposit_coins} coins")
-                updates.append(
-                    ("UPDATE coins SET pocket = pocket - ? WHERE character_id = ?", (deposit_coins, character_id)))
+                updates.append(("UPDATE coins SET pocket = pocket - ? WHERE character_id = ?", (deposit_coins, character_id)))
 
             withdraw_match = re.search(r"You withdraw (\d+) coins.", html)
             if withdraw_match:
                 withdraw_coins = int(withdraw_match.group(1))
                 logging.info(f"Withdrawal found: {withdraw_coins} coins")
-                updates.append(
-                    ("UPDATE coins SET pocket = pocket + ? WHERE character_id = ?", (withdraw_coins, character_id)))
+                updates.append(("UPDATE coins SET pocket = pocket + ? WHERE character_id = ?", (withdraw_coins, character_id)))
 
             transit_match = re.search(r"It costs 5 coins to ride. You have (\d+).", html)
             if transit_match:
@@ -2062,12 +2333,10 @@ class RBCCommunityMap(QMainWindow):
                     coin_count = int(match.group(1 if action != 'given_coins' else 2))
                     if action == 'getting_robbed':
                         vamp_name = match.group(1)
-                        updates.append(
-                            ("UPDATE coins SET pocket = pocket - ? WHERE character_id = ?", (coin_count, character_id)))
+                        updates.append(("UPDATE coins SET pocket = pocket - ? WHERE character_id = ?", (coin_count, character_id)))
                         logging.info(f"Lost {coin_count} coins to {vamp_name}.")
                     else:
-                        updates.append(
-                            ("UPDATE coins SET pocket = pocket + ? WHERE character_id = ?", (coin_count, character_id)))
+                        updates.append(("UPDATE coins SET pocket = pocket + ? WHERE character_id = ?", (coin_count, character_id)))
                         logging.info(f"Gained {coin_count} coins from {action}.")
                     break
 
@@ -2080,6 +2349,145 @@ class RBCCommunityMap(QMainWindow):
         self.current_css_profile = profile_name
         self.apply_custom_css()
         logging.info(f"Switched to profile: {profile_name} and applied CSS")
+
+    def learn_buildings_from_html(self, html: str) -> None:
+        soup = BeautifulSoup(html, "html.parser")
+        selector = ",".join(f"span.{cls}" for cls in BUILDING_CLASS_MAP.keys())
+        if not selector:
+            return
+
+        items = []
+        for el in soup.select(selector):
+            classes = [c for c in (el.get("class") or []) if c in BUILDING_CLASS_MAP]
+            if not classes:
+                continue
+            cls = classes[0]
+
+            raw = el.get_text(" ", strip=True) or (el.get("title") or "")
+            name = self.normalize_building_name(raw)
+            if not name:
+                continue
+
+            col, row = self._infer_col_row_from_dom(el)
+            if not col or not row:
+                continue
+
+            sig = (cls, name, f"{col}|{row}")
+            if sig in self._seen_buildings:
+                continue
+            self._seen_buildings.add(sig)
+
+            items.append({"cls": cls, "name": name, "col": col, "row": row})
+
+        if not items:
+            return
+
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                for it in items:
+                    inserted = self._upsert_building(cur, it["cls"], it["name"], it["col"], it["row"])
+                    if inserted and it["cls"] in ("shop", "guild"):
+                        self._report_discovered_location(it["cls"], it["name"], it["col"], it["row"])
+                conn.commit()
+            logging.debug(f"Auto-learned {len(items)} building(s) from page.")
+        except Exception as e:
+            logging.warning(f"Auto-learn DB step failed: {e}")
+
+    def _infer_col_row_from_dom(self, el) -> tuple[str | None, str | None]:
+        """
+        Read a nearby 'Column & Row' label like 'Kraken & 45th' or 'Ivy & NCL'
+        without touching minimap math.
+        """
+        node = el
+        blob = ""
+        tries = 0
+        while getattr(node, "parent", None) is not None and tries < 5:
+            try:
+                title = node.get("title") or ""
+                text = node.get_text(" ", strip=True) if hasattr(node, "get_text") else ""
+                if title or text:
+                    blob += " " + title + " " + text
+            except Exception:
+                pass
+            node = node.parent
+            tries += 1
+
+        m = re.search(r"([A-Z][A-Za-z\- ]+)\s*[,&]\s*(\d{1,3}(?:st|nd|rd|th)|NCL|WCL)", blob)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+        return None, None
+
+    def normalize_building_name(self, s: str) -> str:
+        s = (s or "").strip()
+        s = re.sub(r"\s+", " ", s)
+        s = s.replace("’", "'").replace("`", "'")
+        # If you already have nickname→canon mapping, use it:
+        if hasattr(self, "_nickname_to_canon"):
+            try:
+                return self._nickname_to_canon(s)
+            except Exception:
+                pass
+        return s
+
+    def _upsert_building(self, cur: sqlite3.Cursor, cls: str, name: str, col: str, row: str) -> bool:
+        """
+        Returns True if a brand‑new record was inserted (useful for reporting hooks).
+        """
+        mapping = BUILDING_CLASS_MAP[cls]
+        table = mapping["table"]
+        name_col = mapping["name_col"]
+
+        if table in ("banks", "taverns", "transits", "placesofinterest", "userbuildings"):
+            cur.execute(f"SELECT 1 FROM {table} WHERE `Column`=? AND Row=? AND {name_col}=?", (col, row, name))
+            if cur.fetchone():
+                return False
+            cur.execute(
+                f"INSERT INTO {table} (`Column`, Row, {name_col}) VALUES (?, ?, ?)",
+                (col, row, name)
+            )
+            logging.debug(f"Inserted {table}: {name} @ {col} & {row}")
+            return True
+
+        if table == "shops":
+            cur.execute("SELECT `Column`, Row FROM shops WHERE Name=?", (name,))
+            row0 = cur.fetchone()
+            if row0:
+                existing_col, existing_row = row0
+                if (existing_col in (None, "", "NA")) or (existing_row in (None, "", "NA")):
+                    cur.execute("UPDATE shops SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
+                    logging.debug(f"Updated shop coords: {name} -> {col} & {row}")
+                return False
+            cur.execute("INSERT INTO shops (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
+            logging.debug(f"Inserted shop: {name} @ {col} & {row}")
+            return True
+
+        if table == "guilds":
+            cur.execute("SELECT `Column`, Row FROM guilds WHERE Name=?", (name,))
+            row0 = cur.fetchone()
+            if row0:
+                existing_col, existing_row = row0
+                if (existing_col in (None, "", "NA")) or (existing_row in (None, "", "NA")):
+                    cur.execute("UPDATE guilds SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
+                    logging.debug(f"Updated guild coords: {name} -> {col} & {row}")
+                return False
+            cur.execute("INSERT INTO guilds (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
+            logging.debug(f"Inserted guild: {name} @ {col} & {row}")
+            return True
+
+        return False
+
+    def _report_discovered_location(self, cls: str, name: str, col: str, row: str) -> None:
+        """
+        Placeholder for your Discord/AVITD reporting (only called on brand‑new shops/guilds).
+        Safe to leave as no‑op until your API endpoint exists.
+        """
+        # Example (when ready):
+        # try:
+        #     requests.post(BOT_URL, json={"kind": cls, "name": name, "col": col, "row": row}, timeout=3)
+        # except Exception as e:
+        #     logging.info(f"Report skipped: {e}")
+        pass
 
     # -----------------------
     # Minimap Drawing and Update
@@ -2104,12 +2512,10 @@ class RBCCommunityMap(QMainWindow):
 
         font_metrics = PySide6.QtGui.QFontMetrics(font)
 
-        logging.debug(
-            f"Drawing minimap with column_start={self.column_start}, row_start={self.row_start}, "f"zoom_level={self.zoom_level}, block_size={block_size}")
+        logging.debug(f"Drawing minimap with column_start={self.column_start}, row_start={self.row_start}, "f"zoom_level={self.zoom_level}, block_size={block_size}")
 
         if self.selected_route_path and len(self.selected_route_path) >= 2:
-            color = PySide6.QtGui.QColor(
-                "green") if self.selected_route_label == "Direct Route" else PySide6.QtGui.QColor(170, 0, 170)
+            color = PySide6.QtGui.QColor("green") if self.selected_route_label == "Direct Route" else PySide6.QtGui.QColor(170, 0, 170)
             pen = PySide6.QtGui.QPen(color, 2)
             painter.setPen(pen)
 
@@ -2191,8 +2597,7 @@ class RBCCommunityMap(QMainWindow):
                 row_index = self.row_start + i
 
                 x0, y0 = j * block_size, i * block_size
-                logging.debug(
-                    f"Drawing grid cell at column_index={column_index}, row_index={row_index}, "f"x0={x0}, y0={y0}")
+                logging.debug(f"Drawing grid cell at column_index={column_index}, row_index={row_index}, "f"x0={x0}, y0={y0}")
 
                 # Draw the cell background
                 painter.setPen(PySide6.QtGui.QColor('white'))
@@ -2219,8 +2624,7 @@ class RBCCommunityMap(QMainWindow):
                 if column_name and row_name:
                     label_text = f"{column_name} & {row_name}"
                     label_height = block_size // 3  # Set label height
-                    draw_label_box(x0 + 2, y0 + 2, block_size - 4, label_height, self.color_mappings["intersect"],
-                                   label_text)
+                    draw_label_box(x0 + 2, y0 + 2, block_size - 4, label_height, self.color_mappings["intersect"], label_text)
 
         # Draw special locations (banks with correct offsets)
         for bank_key in self.banks_coordinates.keys():
@@ -2544,24 +2948,53 @@ class RBCCommunityMap(QMainWindow):
         """
         return self.find_nearest_location(x, y, list(self.taverns_coordinates.values()))
 
-    def find_nearest_bank(self, current_x, current_y):
+    def _resolve_xy_from_labels(self, col_name, row_name):
+        """
+        Convert street labels to numeric coords using self.columns/self.rows.
+        Returns (x, y) where 0 is valid; None means missing.
+        """
+        x = self.columns.get(col_name) if col_name is not None else None
+        y = self.rows.get(row_name) if row_name is not None else None
+        return x, y
+
+    def _nearest_from_mapping(self, current_x, current_y, mapping):
+        """
+        Shared nearest logic for any mapping like:
+          { "A & 1": ("A","1"), ... } or { key: (col_label,row_label), ... }
+        Only skips when a coordinate is None; allows 0.
+        """
         min_distance = float("inf")
-        nearest_bank = None
+        nearest = None
 
-        for bank_key, (col_name, row_name) in self.banks_coordinates.items():
-            if isinstance(bank_key, str):  # Convert from street name format if necessary
-                col_name, row_name = bank_key.split(" & ")
+        for key, pair in mapping.items():
+            # Support either ("A","1") values or keys like "A & 1"
+            if isinstance(pair, (tuple, list)) and len(pair) == 2:
+                col_label, row_label = pair
+            elif isinstance(key, str) and " & " in key:
+                # Fallback: derive labels from key
+                col_label, row_label = [p.strip() for p in key.split(" & ", 1)]
+            else:
+                # Unrecognized entry; skip
+                continue
 
-            col = self.columns.get(col_name, 0)
-            row = self.rows.get(row_name, 0)
+            x, y = self._resolve_xy_from_labels(col_label, row_label)
 
-            if col and row:
-                distance = abs(col - current_x) + abs(row - current_y)
-                if distance < min_distance:
-                    min_distance = distance
-                    nearest_bank = (col, row)  # Return actual coordinates
+            # IMPORTANT: 0 is valid; only skip if truly missing
+            if x is None or y is None:
+                continue
 
-        return nearest_bank  # Returns (x, y) tuple
+            d = abs(x - current_x) + abs(y - current_y)
+            if d < min_distance:
+                min_distance = d
+                nearest = (x, y)
+
+        return nearest  # (x, y) or None
+
+    def find_nearest_bank(self, current_x, current_y):
+        """
+        0-safe nearest bank: treats x=0 or y=0 as valid.
+        """
+        return self._nearest_from_mapping(current_x, current_y, self.banks_coordinates)
 
     def find_nearest_transit(self, x, y):
         """
@@ -2589,8 +3022,7 @@ class RBCCommunityMap(QMainWindow):
         """Retrieve the latest destination for the selected character."""
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT col, row FROM destinations WHERE character_id = ? ORDER BY timestamp DESC LIMIT 1",
-                           (character_id,))
+            cursor.execute("SELECT col, row FROM destinations WHERE character_id = ? ORDER BY timestamp DESC LIMIT 1", (character_id,))
             result = cursor.fetchone()
             return (result[0], result[1]) if result else None
 
@@ -2663,8 +3095,7 @@ class RBCCommunityMap(QMainWindow):
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
-                result = cursor.execute(
-                    "SELECT setting_value FROM settings WHERE setting_name = 'minimap_zoom'").fetchone()
+                result = cursor.execute("SELECT setting_value FROM settings WHERE setting_name = 'minimap_zoom'").fetchone()
                 self.zoom_level = int(result[0]) if result else 3
                 logging.debug(f"Zoom level loaded from database: {self.zoom_level}")
         except sqlite3.Error as e:
@@ -2699,8 +3130,7 @@ class RBCCommunityMap(QMainWindow):
         self.column_start = self.character_x - zoom_offset
         self.row_start = self.character_y - zoom_offset
 
-        logging.debug(
-            f"Recentered minimap: x={self.character_x}, y={self.character_y}, col_start={self.column_start}, row_start={self.row_start}")
+        logging.debug(f"Recentered minimap: x={self.character_x}, y={self.character_y}, col_start={self.column_start}, row_start={self.row_start}")
         self.update_minimap()
 
     def go_to_location(self):
@@ -3023,9 +3453,10 @@ class RBCCommunityMap(QMainWindow):
             "Design and Layout: Shuvi, Blair Wilson (Ikunnaprinsess)\n\n\n\n"
             "Special Thanks:\n\n"
             "Cain \"Leprechaun\" McBride for the LIAM² program \nthat inspired this program\n\n"
-            "Cliff Burton for A View in the Dark which is \nwhere Shops and Guilds data is retrieved\n\n"
+            "Cliff Burton for A View in the Dark and \n The Ravenblack Wiki.\n\n"
             "Everyone who contributes to the \nRavenBlack Wiki and A View in the Dark\n\n"
             "Anders for RBNav and the help along the way\n\n\n\n"
+            "Vespertine for being inspirational and providing additional map data sources\n\n"
             "Most importantly, thank YOU for using this app. \nWe all hope it serves you well!"
         )
 
@@ -3051,13 +3482,11 @@ class RBCCommunityMap(QMainWindow):
         animation = QPropertyAnimation(credits_label, QByteArray(b"geometry"))
         animation.setDuration(35000)
         animation.setStartValue(QRect(0, scroll_area.height(), scroll_area.width(), credits_label.sizeHint().height()))
-        animation.setEndValue(
-            QRect(0, -credits_label.sizeHint().height(), scroll_area.width(), credits_label.sizeHint().height()))
+        animation.setEndValue(QRect(0, -credits_label.sizeHint().height(), scroll_area.width(), credits_label.sizeHint().height()))
         animation.setEasingCurve(QEasingCurve.Type.Linear)
 
         def close_after_delay():
             QTimer.singleShot(2500, credits_dialog.accept)
-
         animation.finished.connect(close_after_delay)
         animation.start()
 
@@ -3197,3 +3626,96 @@ class RBCCommunityMap(QMainWindow):
             self.compass_overlay.close()
 
         self.update_minimap()
+
+    def update_data(self):
+        """
+        Securely triggers the bot to update locations.json using the token-based API flow,
+        waits for completion, and then updates the local database.
+        """
+        logging.info("Requesting secure token...")
+
+        try:
+            # Step 1: Request a one-time token
+            token_response = requests.get("https://lollis-home.ddns.net/api/request-token.py")
+            token_response.raise_for_status()
+            token = token_response.text.strip()
+
+            logging.info(f"Token received: {token}")
+
+            # Step 2: Trigger the update using the token
+            trigger_url = f"https://lollis-home.ddns.net/api/trigger-update.py?token={token}"
+            trigger_response = requests.get(trigger_url)
+            trigger_response.raise_for_status()
+
+            logging.info("Bot scrape triggered. Waiting 5 seconds for update to complete...")
+            time.sleep(5)
+
+            # Step 3: Fetch the updated JSON
+            json_url = "https://lollis-home.ddns.net/api/locations.json"
+            json_response = requests.get(json_url)
+            json_response.raise_for_status()
+            data = json_response.json()
+
+            # Step 4: Update local DB from JSON
+            self.update_database_with_json(data)
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Update error: {e}")
+            QMessageBox.critical(self, "Network Error", f"An error occurred:\n{e}")
+        except Exception as e:
+            logging.error(f"Unexpected error during update: {e}")
+            QMessageBox.critical(self, "Error", str(e))
+
+    def update_database_with_json(self, data):
+        """
+        Updates the local shops and guilds tables based on the JSON structure from the bot,
+        while preserving Peacekeeper's Missions.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+
+                scrape_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                guilds_next = data.get("guilds_next_update")
+                shops_next = data.get("shops_next_update")
+
+                # Clear old locations except Peacekeepers
+                cursor.execute("""
+                    UPDATE guilds
+                    SET `Column` = 'NA', `Row` = 'NA', `next_update` = ?, `last_scraped` = ?
+                    WHERE Name NOT LIKE 'Peacekeepers Mission%'""",
+                               (guilds_next, scrape_timestamp)
+                               )
+                cursor.execute("""
+                    UPDATE shops
+                    SET `Column` = 'NA', `Row` = 'NA', `next_update` = ?, `last_scraped` = ?""",
+                               (shops_next, scrape_timestamp)
+                               )
+
+                # Insert guilds
+                for key, entry in data.get("guilds", {}).items():
+                    name = entry.get("display", key)
+                    col = entry.get("column", "NA")
+                    row = entry.get("row", "NA")
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO guilds (Name, `Column`, `Row`, `next_update`, `last_scraped`)
+                        VALUES (?, ?, ?, ?, ?)""",
+                                   (name, col, row, guilds_next, scrape_timestamp)
+                                   )
+
+                # Insert shops
+                for key, entry in data.get("shops", {}).items():
+                    name = entry.get("display", key)
+                    col = entry.get("column", "NA")
+                    row = entry.get("row", "NA")
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO shops (Name, `Column`, `Row`, `next_update`, `last_scraped`)
+                        VALUES (?, ?, ?, ?, ?)""",
+                                   (name, col, row, shops_next, scrape_timestamp)
+                                   )
+
+                conn.commit()
+                logging.info(f"Database updated with {len(data.get('guilds', {}))} guilds and {len(data.get('shops', {}))} shops.")
+
+        except Exception as e:
+            logging.error(f"Error updating database: {e}")

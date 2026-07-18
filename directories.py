@@ -1,7 +1,10 @@
-from constants import *
 from imports import *
+from constants import *
 
-def ensure_directories_exist(directories: list[str] = None) -> bool:
+
+def ensure_directories_exist(
+        directories: list[os.PathLike | str] | None = None,
+) -> bool:
     """
     Ensure that the required directories exist, creating them if necessary.
     """
@@ -11,17 +14,25 @@ def ensure_directories_exist(directories: list[str] = None) -> bool:
     success = True
     for directory in directories:
         try:
-            # Check existence first to avoid unnecessary syscalls
             if not os.path.isdir(directory):
                 os.makedirs(directory, exist_ok=True)
-                logging.debug(f"Created directory: {directory}")
+                logging.debug("Created directory: %s", directory)
             else:
-                logging.debug(f"Directory already exists: {directory}")
-        except OSError as e:
-            logging.error(f"Failed to create directory '{directory}': {e}")
+                logging.debug("Directory already exists: %s", directory)
+        except OSError as exc:
+            logging.error(
+                "Failed to create directory '%s': %s",
+                directory,
+                exc,
+            )
             success = False
+
     return success
 
-# Example usage at startup (optional, depending on your flow)
+
+# Validate directories at startup
 if not ensure_directories_exist():
-    logging.warning("Some directories could not be created. Application may encounter issues.")
+    logging.warning(
+        "Some directories could not be created. "
+        "Application may encounter issues."
+    )

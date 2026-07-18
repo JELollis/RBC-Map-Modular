@@ -1,96 +1,133 @@
 from imports import *
 from constants import *
 
+
+@dataclass
+class CompassRoute:
+    label: str
+    ap_cost: int
+    description: str
+    path: list
+    bg_color: PySide6.QtGui.QColor
+    text_color: PySide6.QtGui.QColor
+
+
 class CompassOverlay(QDialog):
     """
-    A floating compass window that shows both Direct and Transit routes to a destination,
-    sorted by AP cost. Color-coded: Green = Direct, Purple = Transit.
+    Floating compass window showing Direct and Transit routes,
+    sorted by AP cost.
     """
 
     def __init__(self, direct_route_info, transit_route_info, parent=None):
         """
         Args:
-            direct_route_info (tuple): (int ap_cost, str description)
-            transit_route_info (tuple): (int ap_cost, str description)
+            direct_route_info: (ap_cost, description, path)
+            transit_route_info: (ap_cost, description, path)
         """
         super().__init__(parent)
+
         self.setWindowTitle("Compass Routes")
         self.setFixedSize(200, 150)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            self.windowFlags() | Qt.WindowStaysOnTopHint
+        )
 
-        self.direct_route_info = direct_route_info
-        self.transit_route_info = transit_route_info
+        self.routes: list[CompassRoute] = []
+        self._build_routes(direct_route_info, transit_route_info)
+        self._build_ui()
 
-        self._init_ui()
+    # =====================================================
+    # Route Construction
+    # =====================================================
 
-    def _init_ui(self):
-        layout = QVBoxLayout()
+    def _build_routes(self, direct, transit) -> None:
+        self.routes = [
+            CompassRoute(
+                label="Direct Route",
+                ap_cost=direct[0],
+                description=direct[1],
+                path=direct[2],
+                bg_color=PySide6.QtGui.QColor("green"),
+                text_color=PySide6.QtGui.QColor("white"),
+            ),
+            CompassRoute(
+                label="Transit Route",
+                ap_cost=transit[0],
+                description=transit[1],
+                path=transit[2],
+                bg_color=PySide6.QtGui.QColor(128, 0, 128),
+                text_color=PySide6.QtGui.QColor("white"),
+            ),
+        ]
+
+        self.routes.sort(key=lambda r: r.ap_cost)
+
+    # =====================================================
+    # UI
+    # =====================================================
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
 
         header = QLabel("Shortest Available Route:")
-        header.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header.setStyleSheet(
+            "font-weight: bold; font-size: 14px;"
+        )
         layout.addWidget(header)
 
         self.route_list = QListWidget()
         self.route_list.setFrameShape(QFrame.NoFrame)
-
-        # Track route data
-        self.route_mapping = {}
-
-        routes = [
-            ("Direct Route", self.direct_route_info[0], self.direct_route_info[1], PySide6.QtGui.QColor("green"), PySide6.QtGui.QColor("white")),
-            ("Transit Route", self.transit_route_info[0], self.transit_route_info[1], PySide6.QtGui.QColor(128, 0, 128), PySide6.QtGui.QColor("white")),  # dark purple
-        ]
-        routes.sort(key=lambda r: r[1])  # sort by AP cost
-
-        for label, cost, desc, bg_color, text_color in routes:
-            item = QListWidgetItem(f"{label} — {cost} AP\n{desc}")
-            item.setBackground(bg_color)
-            item.setForeground(text_color)
-            self.route_list.addItem(item)
-            path = self.direct_route_info[2] if label == "Direct Route" else self.transit_route_info[2]
-            self.route_mapping[label] = (cost, desc, path)
-
-        self.route_list.itemClicked.connect(self.route_selected)  # ✅ Hook click signal
         layout.addWidget(self.route_list)
 
+        self._populate_route_list()
+
+        self.route_list.itemClicked.connect(
+            self._route_selected
+        )
+
         btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
-        btn_layout.addStretch()
         btn_layout.addWidget(close_btn)
+
         layout.addLayout(btn_layout)
 
-        self.setLayout(layout)
-
-    def refresh(self, direct_route_info, transit_route_info):
-        """
-        Update the overlay with new route data.
-        """
-        self.direct_route_info = direct_route_info
-        self.transit_route_info = transit_route_info
-
+    def _populate_route_list(self) -> None:
         self.route_list.clear()
-        self.route_mapping = {}  # ✅ Reset once outside the loop
 
-        # Unpack only ap + desc, exclude path (3rd element), just like in _init_ui
-        routes = [
-            ("Direct Route", self.direct_route_info[0], self.direct_route_info[1], PySide6.QtGui.QColor("green"), PySide6.QtGui.QColor("white")),
-            ("Transit Route", self.transit_route_info[0], self.transit_route_info[1], PySide6.QtGui.QColor(128, 0, 128), PySide6.QtGui.QColor("white")),
-        ]
-        routes.sort(key=lambda r: r[1])  # Sort by AP
-
-        for label, cost, desc, bg_color, text_color in routes:
-            item = QListWidgetItem(f"{label} — {cost} AP\n{desc}")
-            item.setBackground(bg_color)
-            item.setForeground(text_color)
+        for route in self.routes:
+            item = QListWidgetItem(
+                f"{route.label} — {route.ap_cost} AP\n{route.description}"
+            )
+            item.setBackground(route.bg_color)
+            item.setForeground(route.text_color)
+            item.setData(Qt.UserRole, route)
             self.route_list.addItem(item)
 
-            # ✅ Preserve path too for selection support
-            path = self.direct_route_info[2] if label == "Direct Route" else self.transit_route_info[2]
-            self.route_mapping[label] = (cost, desc, path)
+    # =====================================================
+    # Refresh
+    # =====================================================
 
-    def route_selected(self, item):
-        label_text = item.text().split("—")[0].strip()
-        route_info = self.route_mapping.get(label_text)
-        if route_info and self.parent():
-            self.parent().set_compass_display_from_overlay(label_text, route_info)
+    def refresh(self, direct_route_info, transit_route_info) -> None:
+        """
+        Update overlay with new route data.
+        """
+        self._build_routes(
+            direct_route_info,
+            transit_route_info,
+        )
+        self._populate_route_list()
+
+    # =====================================================
+    # Selection
+    # =====================================================
+
+    def _route_selected(self, item: QListWidgetItem) -> None:
+        route: CompassRoute = item.data(Qt.UserRole)
+
+        if route and self.parent():
+            self.parent().set_compass_display_from_overlay(
+                route.label,
+                (route.ap_cost, route.description, route.path),
+            )

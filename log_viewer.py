@@ -1,6 +1,7 @@
 from imports import *
 from constants import *
 
+
 class LogViewer(QDialog):
     """A dialog window to view and optionally send application logs."""
 
