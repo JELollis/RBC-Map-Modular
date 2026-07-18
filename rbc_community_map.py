@@ -32,6 +32,23 @@ def _fetch_locations_json(timeout: int) -> dict:
         raise ValueError("Invalid JSON received from locations endpoint") from exc
 
 
+def _timestamp_advanced(latest_ts, baseline_ts) -> bool:
+    """True only if ``latest_ts`` is present and strictly newer than baseline.
+
+    The bot writes ``last_updated`` as a fixed-width ``"%Y-%m-%d %H:%M:%S UTC"``
+    string, which sorts chronologically, so a lexicographic compare is a time
+    compare. A missing/blank ``latest_ts`` is never treated as fresh, and an
+    equal-or-older timestamp (e.g. a stale cached generation) does not count as
+    progress — only a genuinely newer value does. If there is no baseline (no
+    prior timestamp to advance past), any present timestamp counts.
+    """
+    if not latest_ts:
+        return False
+    if not baseline_ts:
+        return True
+    return latest_ts > baseline_ts
+
+
 def _fetch_location_update_v2(timeout: int, log_prefix: str, poll_max_seconds: float) -> dict:
     """Tokenless refresh flow: trigger via /refresh, then poll for fresh data.
 
@@ -67,11 +84,11 @@ def _fetch_location_update_v2(timeout: int, log_prefix: str, poll_max_seconds: f
     logging.info("%sScrape triggered; polling up to %ss for fresh data", log_prefix, poll_max_seconds)
     deadline = time.monotonic() + poll_max_seconds
     latest = _fetch_locations_json(timeout)
-    while latest.get("last_updated") == baseline and time.monotonic() < deadline:
+    while not _timestamp_advanced(latest.get("last_updated"), baseline) and time.monotonic() < deadline:
         time.sleep(REFRESH_POLL_INTERVAL_SECONDS)
         latest = _fetch_locations_json(timeout)
 
-    if latest.get("last_updated") == baseline:
+    if not _timestamp_advanced(latest.get("last_updated"), baseline):
         logging.warning("%sTimed out waiting for fresh data; using latest available", log_prefix)
     return latest
 
