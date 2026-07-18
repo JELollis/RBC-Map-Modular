@@ -1,68 +1,113 @@
-from constants import LOG_DIR, LOG_FORMAT, DEFAULT_LOG_LEVEL, VERSION_NUMBER, DB_PATH
-from imports import logging, datetime, sqlite3, sys
+from imports import *
+from constants import *
 
-def get_logging_level_from_db(default=logging.INFO) -> int:
+
+def get_logging_level_from_db(default: int = logging.INFO) -> int:
+    """Retrieve logging level from the settings table, with safe fallback."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT setting_value FROM settings WHERE setting_name = 'log_level'")
+            cursor.execute(
+                "SELECT setting_value FROM settings WHERE setting_name = 'log_level'"
+            )
             row = cursor.fetchone()
             if row:
                 return int(row[0])
-    except Exception as e:
-        print(f"Failed to load log level from DB: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(f"Failed to load log level from DB: {exc}", file=sys.stderr)
     return default
 
-def setup_logging(log_dir: str = LOG_DIR, log_level: int = DEFAULT_LOG_LEVEL, log_format: str = LOG_FORMAT) -> bool:
-    """
-    Set up logging configuration to save logs in the specified directory with daily rotation.
-    """
-    log_filename = None  # Predefine so it's always available in except blocks
-    try:
-        log_filename = datetime.now().strftime(f'{log_dir}/rbc_%Y-%m-%d.log')
 
-        # Clear any existing handlers to avoid duplication if called multiple times
+def setup_logging(
+        log_dir: os.PathLike | str = LOG_DIR,
+        log_level: int = DEFAULT_LOG_LEVEL,
+        log_format: str = LOG_FORMAT,
+) -> bool:
+    """
+    Configure file-based logging with daily log files.
+    """
+    log_filename: str | None = None
+
+    try:
+        log_filename = os.path.join(
+            str(log_dir),
+            datetime.now().strftime("rbc_%Y-%m-%d.log"),
+        )
+
         logger = logging.getLogger()
+
+        # Prevent duplicate handlers if re-initialized
         if logger.handlers:
             logger.handlers.clear()
 
-        handler = logging.FileHandler(log_filename, mode='a', encoding='utf-8')
+        handler = logging.FileHandler(
+            log_filename,
+            mode="a",
+            encoding="utf-8",
+        )
         handler.setFormatter(logging.Formatter(log_format))
         handler.setLevel(log_level)
 
         logger.setLevel(log_level)
         logger.addHandler(handler)
 
-        logger.info(f"Logging initialized. Logs will be written to {log_filename}")
+        logger.info(
+            "Logging initialized. Logs will be written to %s",
+            log_filename,
+        )
         return True
 
-    except OSError as e:
-        print(f"Failed to set up logging to {log_filename or '[unknown]'}: {e}", file=sys.stderr)
+    except OSError as exc:
+        print(
+            f"Failed to set up logging to {log_filename or '[unknown]'}: {exc}",
+            file=sys.stderr,
+        )
         return False
-    except Exception as e:
-        print(f"Unexpected error during logging setup: {e}", file=sys.stderr)
+    except Exception as exc:
+        print(
+            f"Unexpected error during logging setup: {exc}",
+            file=sys.stderr,
+        )
         return False
+
 
 # Initialize logging at startup
 if not setup_logging(log_level=get_logging_level_from_db()):
-    print("Logging setup failed. Continuing without file logging.", file=sys.stderr)
-    logging.basicConfig(level=DEFAULT_LOG_LEVEL, format=LOG_FORMAT, stream=sys.stderr)  # Fallback to console
+    print(
+        "Logging setup failed. Continuing without file logging.",
+        file=sys.stderr,
+    )
+    logging.basicConfig(
+        level=DEFAULT_LOG_LEVEL,
+        format=LOG_FORMAT,
+        stream=sys.stderr,
+    )
 
-# Log app version
-logging.info(f"Launching app version {VERSION_NUMBER}")
+logging.info("Launching app version %s", VERSION_NUMBER)
+
 
 def save_logging_level_to_db(level: int) -> bool:
+    """Persist the selected logging level to the settings table."""
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO settings (setting_name, setting_value)
                 VALUES (?, ?)
-                ON CONFLICT(setting_name) DO UPDATE SET setting_value=excluded.setting_value
-            """, ('log_level', str(level)))
+                ON CONFLICT(setting_name)
+                DO UPDATE SET setting_value = excluded.setting_value
+                """,
+                ("log_level", str(level)),
+            )
             conn.commit()
-            logging.info(f"Log level updated to {logging.getLevelName(level)} in settings")
-            return True
-    except Exception as e:
-        logging.error(f"Failed to save log level: {e}")
+
+        logging.info(
+            "Log level updated to %s in settings",
+            logging.getLevelName(level),
+        )
+        return True
+
+    except Exception as exc:
+        logging.error("Failed to save log level: %s", exc)
         return False

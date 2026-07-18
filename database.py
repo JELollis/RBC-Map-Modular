@@ -1,4 +1,7 @@
+from imports import *
+from constants import *
 from directories import *
+
 
 def create_tables(conn: sqlite3.Connection) -> None:
     """Create database tables if they don’t exist."""
@@ -6,7 +9,7 @@ def create_tables(conn: sqlite3.Connection) -> None:
     tables = [
         """CREATE TABLE IF NOT EXISTS banks (
             ID INTEGER PRIMARY KEY,
-            Column TEXT NOT NULL,
+            `Column` TEXT NOT NULL,
             Row TEXT NOT NULL,
             Name TEXT DEFAULT NULL
         )""",
@@ -64,7 +67,7 @@ def create_tables(conn: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS guilds (
             ID INTEGER PRIMARY KEY,
             Name TEXT NOT NULL UNIQUE,
-            Column TEXT NOT NULL,
+            `Column` TEXT NOT NULL,
             Row TEXT NOT NULL,
             next_update TIMESTAMP DEFAULT NULL,
             last_scraped TIMESTAMP DEFAULT NULL
@@ -76,7 +79,7 @@ def create_tables(conn: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS placesofinterest (
             ID INTEGER PRIMARY KEY,
             Name TEXT NOT NULL,
-            Column TEXT NOT NULL,
+            `Column` TEXT NOT NULL,
             Row TEXT NOT NULL
         )""",
         """CREATE TABLE IF NOT EXISTS powers (
@@ -116,27 +119,27 @@ def create_tables(conn: sqlite3.Connection) -> None:
         """CREATE TABLE IF NOT EXISTS shops (
             ID INTEGER PRIMARY KEY,
             Name TEXT NOT NULL UNIQUE,
-            Column TEXT NOT NULL,
+            `Column` TEXT NOT NULL,
             Row TEXT NOT NULL,
             next_update TIMESTAMP DEFAULT NULL,
             last_scraped TIMESTAMP DEFAULT NULL
         )""",
         """CREATE TABLE IF NOT EXISTS taverns (
             ID INTEGER PRIMARY KEY,
-            Column TEXT NOT NULL,
+            `Column` TEXT NOT NULL,
             Row TEXT NOT NULL,
             Name TEXT NOT NULL
         )""",
         """CREATE TABLE IF NOT EXISTS transits (
             ID INTEGER PRIMARY KEY,
-            Column TEXT NOT NULL,
+            `Column` TEXT NOT NULL,
             Row TEXT NOT NULL,
             Name TEXT NOT NULL
         )""",
         """CREATE TABLE IF NOT EXISTS userbuildings (
             ID INTEGER PRIMARY KEY,
             Name TEXT NOT NULL,
-            Column TEXT NOT NULL,
+            `Column` TEXT NOT NULL,
             Row TEXT NOT NULL
         )""",
         """CREATE TABLE IF NOT EXISTS discord_servers (
@@ -158,215 +161,215 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
     """Insert initial data into the database."""
     cursor = conn.cursor()
     initial_data = [
-        ("INSERT OR IGNORE INTO settings (setting_name, setting_value) VALUES (?, ?)", [
+        ("REPLACE INTO settings (setting_name, setting_value) VALUES (?, ?)", [
             ('keybind_config', 1),
             ('css_profile', 'Default'),
             ('log_level', str(DEFAULT_LOG_LEVEL))
         ]),
 
-        ("INSERT OR IGNORE INTO banks (ID, Column, Row, Name) VALUES (?, ?, ?, ?)", [
+        ("REPLACE INTO banks (ID, `Column`, Row, Name) VALUES (?, ?, ?, ?)", [
             (1,'Aardvark','82nd','OmniBank'),
             (2,'Alder','40th','OmniBank'),
-             (3,'Alder','80th','OmniBank'),
-             (4,'Amethyst','16th','OmniBank'),
-             (5,'Amethyst','37th','OmniBank'),
-             (6,'Amethyst','99th','OmniBank'),
-             (7,'Anguish','30th','OmniBank'),
-             (8,'Anguish','73rd','OmniBank'),
-             (9,'Anguish','91st','OmniBank'),
-             (10,'Beech','26th','OmniBank'),
-             (11,'Beech','39th','OmniBank'),
-             (12,'Beryl','28th','OmniBank'),
-             (13,'Beryl','40th','OmniBank'),
-             (14,'Beryl','65th','OmniBank'),
-             (15,'Beryl','72nd','OmniBank'),
-             (16,'Bleak','14th','OmniBank'),
-             (17,'Buzzard','13th','OmniBank'),
-             (18,'Cedar','1st','OmniBank'),
-             (19,'Cedar','52nd','OmniBank'),
-             (20,'Cedar','80th','OmniBank'),
-             (21,'Chagrin','23rd','OmniBank'),
-             (22,'Chagrin','39th','OmniBank'),
-             (23,'Cobalt','46th','OmniBank'),
-             (24,'Cobalt','81st','OmniBank'),
-             (25,'Cobalt','88th','OmniBank'),
-             (26,'Cormorant','93rd','OmniBank'),
-             (27,'Despair','1st','OmniBank'),
-             (28,'Despair','75th','OmniBank'),
-             (29,'Dogwood','4th','OmniBank'),
-             (30,'Duck','37th','OmniBank'),
-             (31,'Duck','77th','OmniBank'),
-             (32,'Eagle','64th','OmniBank'),
-             (33,'Eagle','89th','OmniBank'),
-             (34,'Elm','98th','OmniBank'),
-             (35,'Emerald','19th','OmniBank'),
-             (36,'Emerald','90th','OmniBank'),
-             (37,'Emerald','99th','OmniBank'),
-             (38,'Ennui','20th','OmniBank'),
-             (39,'Ennui','78th','OmniBank'),
-             (40,'Fear','15th','OmniBank'),
-             (41,'Ferret','32nd','OmniBank'),
-             (42,'Ferret','90th','OmniBank'),
-             (43,'Fir','2nd','OmniBank'),
-             (44,'Flint','37th','OmniBank'),
-             (45,'Flint','45th','OmniBank'),
-             (46,'Flint','47th','OmniBank'),
-             (47,'Flint','5th','OmniBank'),
-             (48,'Gloom','34th','OmniBank'),
-             (49,'Gloom','71st','OmniBank'),
-             (50,'Gloom','89th','OmniBank'),
-             (51,'Gloom','90th','OmniBank'),
-             (52,'Haddock','46th','OmniBank'),
-             (53,'Haddock','52nd','OmniBank'),
-             (54,'Haddock','67th','OmniBank'),
-             (55,'Haddock','74th','OmniBank'),
-             (56,'Haddock','88th','OmniBank'),
-             (57,'Hessite','39th','OmniBank'),
-             (58,'Hessite','76th','OmniBank'),
-             (59,'Holly','96th','OmniBank'),
-             (60,'Horror','49th','OmniBank'),
-             (61,'Horror','59th','OmniBank'),
-             (62,'Ire','31st','OmniBank'),
-             (63,'Ire','42nd','OmniBank'),
-             (64,'Ire','53rd','OmniBank'),
-             (65,'Ire','97th','OmniBank'),
-             (66,'Ivory','5th','OmniBank'),
-             (67,'Ivory','71st','OmniBank'),
-             (68,'Ivy','70th','OmniBank'),
-             (69,'Ivy','79th','OmniBank'),
-             (70,'Ivy','NCL','OmniBank'),
-             (71,'Jackal','43rd','OmniBank'),
-             (72,'Jaded','25th','OmniBank'),
-             (73,'Jaded','48th','OmniBank'),
-             (74,'Jaded','71st','OmniBank'),
-             (75,'Juniper','16th','OmniBank'),
-             (76,'Juniper','20th','OmniBank'),
-             (77,'Juniper','98th','OmniBank'),
-             (78,'Knotweed','15th','OmniBank'),
-             (79,'Knotweed','29th','OmniBank'),
-             (80,'Kraken','13th','OmniBank'),
-             (81,'Kraken','18th','OmniBank'),
-             (82,'Kraken','34th','OmniBank'),
-             (83,'Kraken','3rd','OmniBank'),
-             (84,'Kraken','45th','OmniBank'),
-             (85,'Kraken','48th','OmniBank'),
-             (86,'Kraken','7th','OmniBank'),
-             (87,'Kyanite','40th','OmniBank'),
-             (88,'Kyanite','6th','OmniBank'),
-             (89,'Larch','33rd','OmniBank'),
-             (90,'Larch','7th','OmniBank'),
-             (91,'Larch','91st','OmniBank'),
-             (92,'Lead','11th','OmniBank'),
-             (93,'Lead','21st','OmniBank'),
-             (94,'Lead','88th','OmniBank'),
-             (95,'Lion','80th','OmniBank'),
-             (96,'Lonely','93rd','OmniBank'),
-             (97,'Malachite','11th','OmniBank'),
-             (98,'Malachite','32nd','OmniBank'),
-             (99,'Malachite','87th','OmniBank'),
-             (100,'Malaise','36th','OmniBank'),
-             (101,'Malaise','4th','OmniBank'),
-             (102,'Malaise','50th','OmniBank'),
-             (103,'Maple','34th','OmniBank'),
-             (104,'Maple','84th','OmniBank'),
-             (105,'Maple','85th','OmniBank'),
-             (106,'Mongoose','78th','OmniBank'),
-             (107,'Mongoose','79th','OmniBank'),
-             (108,'Mongoose','91st','OmniBank'),
-             (109,'Nervous','10th','OmniBank'),
-             (110,'Nettle','37th','OmniBank'),
-             (111,'Nettle','67th','OmniBank'),
-             (112,'Nickel','93rd','OmniBank'),
-             (113,'Obsidian','36th','OmniBank'),
-             (114,'Obsidian','79th','OmniBank'),
-             (115,'Octopus','27th','OmniBank'),
-             (116,'Octopus','71st','OmniBank'),
-             (117,'Octopus','77th','OmniBank'),
-             (118,'Olive','99th','OmniBank'),
-             (119,'Olive','9th','OmniBank'),
-             (120,'Oppression','2nd','OmniBank'),
-             (121,'Oppression','89th','OmniBank'),
-             (122,'Pessimism','19th','OmniBank'),
-             (123,'Pessimism','44th','OmniBank'),
-             (124,'Pessimism','87th','OmniBank'),
-             (125,'Pilchard','44th','OmniBank'),
-             (126,'Pilchard','60th','OmniBank'),
-             (127,'Pine','42nd','OmniBank'),
-             (128,'Pine','44th','OmniBank'),
-             (129,'Pyrites','11th','OmniBank'),
-             (130,'Pyrites','24th','OmniBank'),
-             (131,'Pyrites','90th','OmniBank'),
-             (132,'Quail','10th','OmniBank'),
-             (133,'Quail','12th','OmniBank'),
-             (134,'Quail','18th','OmniBank'),
-             (135,'Quail','26th','OmniBank'),
-             (136,'Quail','36th','OmniBank'),
-             (137,'Quail','41st','OmniBank'),
-             (138,'Quail','58th','OmniBank'),
-             (139,'Quail','74th','OmniBank'),
-             (140,'Qualms','28th','OmniBank'),
-             (141,'Qualms','57th','OmniBank'),
-             (142,'Qualms','75th','OmniBank'),
-             (143,'Quartz','75th','OmniBank'),
-             (144,'Quince','48th','OmniBank'),
-             (145,'Quince','61st','OmniBank'),
-             (146,'Ragweed','31st','OmniBank'),
-             (147,'Ragweed','56th','OmniBank'),
-             (148,'Raven','11th','OmniBank'),
-             (149,'Raven','15th','OmniBank'),
-             (150,'Raven','79th','OmniBank'),
-             (151,'Raven','98th','OmniBank'),
-             (152,'Regret','70th','OmniBank'),
-             (153,'Ruby','18th','OmniBank'),
-             (154,'Ruby','45th','OmniBank'),
-             (155,'Sorrow','48th','OmniBank'),
-             (156,'Sorrow','9th','OmniBank'),
-             (157,'Squid','10th','OmniBank'),
-             (158,'Squid','24th','OmniBank'),
-             (159,'Steel','31st','OmniBank'),
-             (160,'Steel','64th','OmniBank'),
-             (161,'Steel','7th','OmniBank'),
-             (162,'Sycamore','16th','OmniBank'),
-             (163,'Tapir','11th','OmniBank'),
-             (164,'Tapir','41st','OmniBank'),
-             (165,'Tapir','NCL','OmniBank'),
-             (166,'Teasel','60th','OmniBank'),
-             (167,'Teasel','66th','OmniBank'),
-             (168,'Teasel','92nd','OmniBank'),
-             (169,'Torment','23rd','OmniBank'),
-             (170,'Torment','28th','OmniBank'),
-             (171,'Torment','31st','OmniBank'),
-             (172,'Umbrella','20th','OmniBank'),
-             (173,'Umbrella','80th','OmniBank'),
-             (174,'Unctuous','23rd','OmniBank'),
-             (175,'Unctuous','43rd','OmniBank'),
-             (176,'Unicorn','11th','OmniBank'),
-             (177,'Unicorn','78th','OmniBank'),
-             (178,'Uranium','1st','OmniBank'),
-             (179,'Uranium','48th','OmniBank'),
-             (180,'Uranium','93rd','OmniBank'),
-             (181,'Uranium','97th','OmniBank'),
-             (182,'Vauxite','68th','OmniBank'),
-             (183,'Vauxite','91st','OmniBank'),
-             (184,'Vexation','24th','OmniBank'),
-             (185,'Vulture','43rd','OmniBank'),
-             (186,'Vulture','82nd','OmniBank'),
-             (187,'WCL','77th','OmniBank'),
-             (188,'Willow','84th','OmniBank'),
-             (189,'Woe','44th','OmniBank'),
-             (190,'Woe','85th','OmniBank'),
-             (191,'Yak','45th','OmniBank'),
-             (192,'Yak','82nd','OmniBank'),
-             (193,'Yak','94th','OmniBank'),
-             (194,'Yearning','75th','OmniBank'),
-             (195,'Yearning','93rd','OmniBank'),
-             (196,'Yew','4th','OmniBank'),
-             (197,'Zebra','61st','OmniBank'),
-             (198,'Zelkova','23rd','OmniBank'),
-             (199,'Zelkova','73rd','OmniBank'),
-             (200,'Zinc','74th','OmniBank')
+            (3,'Alder','80th','OmniBank'),
+            (4,'Amethyst','16th','OmniBank'),
+            (5,'Amethyst','37th','OmniBank'),
+            (6,'Amethyst','99th','OmniBank'),
+            (7,'Anguish','30th','OmniBank'),
+            (8,'Anguish','73rd','OmniBank'),
+            (9,'Anguish','91st','OmniBank'),
+            (10,'Beech','26th','OmniBank'),
+            (11,'Beech','39th','OmniBank'),
+            (12,'Beryl','28th','OmniBank'),
+            (13,'Beryl','40th','OmniBank'),
+            (14,'Beryl','65th','OmniBank'),
+            (15,'Beryl','72nd','OmniBank'),
+            (16,'Bleak','14th','OmniBank'),
+            (17,'Buzzard','13th','OmniBank'),
+            (18,'Cedar','1st','OmniBank'),
+            (19,'Cedar','52nd','OmniBank'),
+            (20,'Cedar','80th','OmniBank'),
+            (21,'Chagrin','23rd','OmniBank'),
+            (22,'Chagrin','39th','OmniBank'),
+            (23,'Cobalt','46th','OmniBank'),
+            (24,'Cobalt','81st','OmniBank'),
+            (25,'Cobalt','88th','OmniBank'),
+            (26,'Cormorant','93rd','OmniBank'),
+            (27,'Despair','1st','OmniBank'),
+            (28,'Despair','75th','OmniBank'),
+            (29,'Dogwood','4th','OmniBank'),
+            (30,'Duck','37th','OmniBank'),
+            (31,'Duck','77th','OmniBank'),
+            (32,'Eagle','64th','OmniBank'),
+            (33,'Eagle','89th','OmniBank'),
+            (34,'Elm','98th','OmniBank'),
+            (35,'Emerald','19th','OmniBank'),
+            (36,'Emerald','90th','OmniBank'),
+            (37,'Emerald','99th','OmniBank'),
+            (38,'Ennui','20th','OmniBank'),
+            (39,'Ennui','78th','OmniBank'),
+            (40,'Fear','15th','OmniBank'),
+            (41,'Ferret','32nd','OmniBank'),
+            (42,'Ferret','90th','OmniBank'),
+            (43,'Fir','2nd','OmniBank'),
+            (44,'Flint','37th','OmniBank'),
+            (45,'Flint','45th','OmniBank'),
+            (46,'Flint','47th','OmniBank'),
+            (47,'Flint','5th','OmniBank'),
+            (48,'Gloom','34th','OmniBank'),
+            (49,'Gloom','71st','OmniBank'),
+            (50,'Gloom','89th','OmniBank'),
+            (51,'Gloom','90th','OmniBank'),
+            (52,'Haddock','46th','OmniBank'),
+            (53,'Haddock','52nd','OmniBank'),
+            (54,'Haddock','67th','OmniBank'),
+            (55,'Haddock','74th','OmniBank'),
+            (56,'Haddock','88th','OmniBank'),
+            (57,'Hessite','39th','OmniBank'),
+            (58,'Hessite','76th','OmniBank'),
+            (59,'Holly','96th','OmniBank'),
+            (60,'Horror','49th','OmniBank'),
+            (61,'Horror','59th','OmniBank'),
+            (62,'Ire','31st','OmniBank'),
+            (63,'Ire','42nd','OmniBank'),
+            (64,'Ire','53rd','OmniBank'),
+            (65,'Ire','97th','OmniBank'),
+            (66,'Ivory','5th','OmniBank'),
+            (67,'Ivory','71st','OmniBank'),
+            (68,'Ivy','70th','OmniBank'),
+            (69,'Ivy','79th','OmniBank'),
+            (70,'Ivy','NCL','OmniBank'),
+            (71,'Jackal','43rd','OmniBank'),
+            (72,'Jaded','25th','OmniBank'),
+            (73,'Jaded','48th','OmniBank'),
+            (74,'Jaded','71st','OmniBank'),
+            (75,'Juniper','16th','OmniBank'),
+            (76,'Juniper','20th','OmniBank'),
+            (77,'Juniper','98th','OmniBank'),
+            (78,'Knotweed','15th','OmniBank'),
+            (79,'Knotweed','29th','OmniBank'),
+            (80,'Kraken','13th','OmniBank'),
+            (81,'Kraken','18th','OmniBank'),
+            (82,'Kraken','34th','OmniBank'),
+            (83,'Kraken','3rd','OmniBank'),
+            (84,'Kraken','45th','OmniBank'),
+            (85,'Kraken','48th','OmniBank'),
+            (86,'Kraken','7th','OmniBank'),
+            (87,'Kyanite','40th','OmniBank'),
+            (88,'Kyanite','6th','OmniBank'),
+            (89,'Larch','33rd','OmniBank'),
+            (90,'Larch','7th','OmniBank'),
+            (91,'Larch','91st','OmniBank'),
+            (92,'Lead','11th','OmniBank'),
+            (93,'Lead','21st','OmniBank'),
+            (94,'Lead','88th','OmniBank'),
+            (95,'Lion','80th','OmniBank'),
+            (96,'Lonely','93rd','OmniBank'),
+            (97,'Malachite','11th','OmniBank'),
+            (98,'Malachite','32nd','OmniBank'),
+            (99,'Malachite','87th','OmniBank'),
+            (100,'Malaise','36th','OmniBank'),
+            (101,'Malaise','4th','OmniBank'),
+            (102,'Malaise','50th','OmniBank'),
+            (103,'Maple','34th','OmniBank'),
+            (104,'Maple','84th','OmniBank'),
+            (105,'Maple','85th','OmniBank'),
+            (106,'Mongoose','78th','OmniBank'),
+            (107,'Mongoose','79th','OmniBank'),
+            (108,'Mongoose','91st','OmniBank'),
+            (109,'Nervous','10th','OmniBank'),
+            (110,'Nettle','37th','OmniBank'),
+            (111,'Nettle','67th','OmniBank'),
+            (112,'Nickel','93rd','OmniBank'),
+            (113,'Obsidian','36th','OmniBank'),
+            (114,'Obsidian','79th','OmniBank'),
+            (115,'Octopus','27th','OmniBank'),
+            (116,'Octopus','71st','OmniBank'),
+            (117,'Octopus','77th','OmniBank'),
+            (118,'Olive','99th','OmniBank'),
+            (119,'Olive','9th','OmniBank'),
+            (120,'Oppression','2nd','OmniBank'),
+            (121,'Oppression','89th','OmniBank'),
+            (122,'Pessimism','19th','OmniBank'),
+            (123,'Pessimism','44th','OmniBank'),
+            (124,'Pessimism','87th','OmniBank'),
+            (125,'Pilchard','44th','OmniBank'),
+            (126,'Pilchard','60th','OmniBank'),
+            (127,'Pine','42nd','OmniBank'),
+            (128,'Pine','44th','OmniBank'),
+            (129,'Pyrites','11th','OmniBank'),
+            (130,'Pyrites','24th','OmniBank'),
+            (131,'Pyrites','90th','OmniBank'),
+            (132,'Quail','10th','OmniBank'),
+            (133,'Quail','12th','OmniBank'),
+            (134,'Quail','18th','OmniBank'),
+            (135,'Quail','26th','OmniBank'),
+            (136,'Quail','36th','OmniBank'),
+            (137,'Quail','41st','OmniBank'),
+            (138,'Quail','58th','OmniBank'),
+            (139,'Quail','74th','OmniBank'),
+            (140,'Qualms','28th','OmniBank'),
+            (141,'Qualms','57th','OmniBank'),
+            (142,'Qualms','75th','OmniBank'),
+            (143,'Quartz','75th','OmniBank'),
+            (144,'Quince','48th','OmniBank'),
+            (145,'Quince','61st','OmniBank'),
+            (146,'Ragweed','31st','OmniBank'),
+            (147,'Ragweed','56th','OmniBank'),
+            (148,'Raven','11th','OmniBank'),
+            (149,'Raven','15th','OmniBank'),
+            (150,'Raven','79th','OmniBank'),
+            (151,'Raven','98th','OmniBank'),
+            (152,'Regret','70th','OmniBank'),
+            (153,'Ruby','18th','OmniBank'),
+            (154,'Ruby','45th','OmniBank'),
+            (155,'Sorrow','48th','OmniBank'),
+            (156,'Sorrow','9th','OmniBank'),
+            (157,'Squid','10th','OmniBank'),
+            (158,'Squid','24th','OmniBank'),
+            (159,'Steel','31st','OmniBank'),
+            (160,'Steel','64th','OmniBank'),
+            (161,'Steel','7th','OmniBank'),
+            (162,'Sycamore','16th','OmniBank'),
+            (163,'Tapir','11th','OmniBank'),
+            (164,'Tapir','41st','OmniBank'),
+            (165,'Tapir','NCL','OmniBank'),
+            (166,'Teasel','60th','OmniBank'),
+            (167,'Teasel','66th','OmniBank'),
+            (168,'Teasel','92nd','OmniBank'),
+            (169,'Torment','23rd','OmniBank'),
+            (170,'Torment','28th','OmniBank'),
+            (171,'Torment','31st','OmniBank'),
+            (172,'Umbrella','20th','OmniBank'),
+            (173,'Umbrella','80th','OmniBank'),
+            (174,'Unctuous','23rd','OmniBank'),
+            (175,'Unctuous','43rd','OmniBank'),
+            (176,'Unicorn','11th','OmniBank'),
+            (177,'Unicorn','78th','OmniBank'),
+            (178,'Uranium','1st','OmniBank'),
+            (179,'Uranium','48th','OmniBank'),
+            (180,'Uranium','93rd','OmniBank'),
+            (181,'Uranium','97th','OmniBank'),
+            (182,'Vauxite','68th','OmniBank'),
+            (183,'Vauxite','91st','OmniBank'),
+            (184,'Vexation','24th','OmniBank'),
+            (185,'Vulture','43rd','OmniBank'),
+            (186,'Vulture','82nd','OmniBank'),
+            (187,'WCL','77th','OmniBank'),
+            (188,'Willow','84th','OmniBank'),
+            (189,'Woe','44th','OmniBank'),
+            (190,'Woe','85th','OmniBank'),
+            (191,'Yak','45th','OmniBank'),
+            (192,'Yak','82nd','OmniBank'),
+            (193,'Yak','94th','OmniBank'),
+            (194,'Yearning','75th','OmniBank'),
+            (195,'Yearning','93rd','OmniBank'),
+            (196,'Yew','4th','OmniBank'),
+            (197,'Zebra','61st','OmniBank'),
+            (198,'Zelkova','23rd','OmniBank'),
+            (199,'Zelkova','73rd','OmniBank'),
+            (200,'Zinc','74th','OmniBank')
         ]),
-        ("INSERT OR IGNORE INTO color_mappings (id, type, color) VALUES (?, ?, ?)", [
+        ("REPLACE INTO color_mappings (id, type, color) VALUES (?, ?, ?)", [
             (1, 'bank', '#0000ff'),
             (2, 'tavern', '#887700'),
             (3, 'transit', '#880000'),
@@ -389,7 +392,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (20, 'button_border_color', '#222244'),
             (21, 'graveyard', '#888888')
         ]),
-        ("INSERT OR IGNORE INTO `columns` (ID, Name, Coordinate) VALUES (?, ?, ?)", [
+        ("REPLACE INTO `columns` (ID, Name, Coordinate) VALUES (?, ?, ?)", [
             ('1', 'WCL', '0'),
             ('2', 'Western City Limits', '0'),
             ('3', 'Aardvark', '2'),
@@ -493,8 +496,8 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             ('101', 'Zinc', '198'),
             ('102', 'Zestless', '200')
         ]),
-        ("INSERT OR IGNORE INTO css_profiles (profile_name) VALUES (?)", [("Default",)]),
-        ("INSERT OR IGNORE INTO custom_css (profile_name, element, value) VALUES (?, ?, ?)", [
+        ("REPLACE INTO css_profiles (profile_name) VALUES (?)", [("Default",)]),
+        ("REPLACE INTO custom_css (profile_name, element, value) VALUES (?, ?, ?)", [
             ("Default", "BODY", "background-color:#000000;"),
             ("Default", "H1,DIV,BODY,P,A", "font-family:Verdana,Arial,sans-serif;"),
             ("Default", "BODY,H1", "text-align:center;"),
@@ -552,7 +555,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             ("Default", ".rich", "color:#ffff44;"),
             ("Default", ".mh","border:none; background-color:transparent; text-decoration:underline; color:white; padding:0px; cursor:hand;")
         ]),
-        ("INSERT OR IGNORE INTO guilds (ID, Name, Column, Row, next_update) VALUES (?, ?, ?, ?, ?)", [
+        ("INSERT OR IGNORE INTO guilds (ID, Name, `Column`, Row, next_update) VALUES (?, ?, ?, ?, ?)", [
             (1,'Allurists Guild 1','NA','NA',''),
             (2,'Allurists Guild 2','NA','NA',''),
             (3,'Allurists Guild 3','NA','NA',''),
@@ -572,7 +575,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (17,'Peacekeepers Mission 2','Unicorn','33rd',''),
             (18,'Peacekeepers Mission 3','Emerald','33rd','')
         ]),
-        ("INSERT OR IGNORE INTO placesofinterest (ID, Name, Column, Row) VALUES (?, ?, ?, ?)", [
+        ("REPLACE INTO placesofinterest (ID, Name, `Column`, Row) VALUES (?, ?, ?, ?)", [
             (1,'Battle Arena','Zelkova','52nd'),
             (2,'Hall of Binding','Vervain','40th'),
             (3,'Hall of Severance','Walrus','40th'),
@@ -581,7 +584,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (6,'Eternal Aubade of Mystical Treasures','Zelkova','47th'),
             (7,'Kindred Hospital','Woe','13th')
         ]),
-        ("INSERT OR IGNORE INTO powers (power_id, name, guild, cost, quest_info, skill_info) VALUES (?, ?, ?, ?, ?, ?)", [
+        ("REPLACE INTO powers (power_id, name, guild, cost, quest_info, skill_info) VALUES (?, ?, ?, ?, ?, ?)", [
             (1,'Battle Cloak','Any Peacekeeper''s Mission',2000,'None','Buying a cloak from one of the peace missions will prevent you from attacking or being attacked by non-cloaked vampires. The cloak enforces a resting rule which limits you to bite only humans after being zeroed until you reach 250 BP. Vampires cannot bite or attack you during this time. You may still bite and rob non-cloaked vampires, as they can do the same to you. Cloaked vampires appear blue, and if zeroed, they turn pink.'),
             (2,'Celerity 1','Travellers Guild 1',4000,'Bring items to 3 pubs, no transits but you can teleport.','AP regeneration time reduced by 5 minutes per AP (25 minutes/AP).'),
             (3,'Celerity 2','Travellers Guild 2',8000,'Bring items to 6 pubs, no transits but you can teleport.','AP regeneration time reduced by 5 minutes per AP (20 minutes/AP).'),
@@ -617,7 +620,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (33,'Thrift 2','Allurists Guild 2',3000,'Buy 1 Perfect Red Rose from 3 specified shops.','10% chance to keep a used item/scroll instead of it burning up.'),
             (34,'Thrift 3','Allurists Guild 3',10000,'Buy 1 Perfect Red Rose from 6 specified shops.','15% chance to keep a used item/scroll instead of it burning up.')
         ]),
-        ("INSERT OR IGNORE INTO `rows` (ID, Name, Coordinate) VALUES (?, ?, ?)", [
+        ("REPLACE INTO `rows` (ID, Name, Coordinate) VALUES (?, ?, ?)", [
             ('1', 'NCL', '0'),
             ('2', 'Northern City Limits', '0'),
             ('3', '1st', '2'),
@@ -721,7 +724,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             ('101', '99th', '198'),
             ('102', '100th', '200')
         ]),
-        ("INSERT OR IGNORE INTO shop_items (id, shop_name, item_name, base_price, charisma_level_1, charisma_level_2, charisma_level_3) VALUES (?, ?, ?, ?, ?, ?, ?)", [
+        ("REPLACE INTO shop_items (id, shop_name, item_name, base_price, charisma_level_1, charisma_level_2, charisma_level_3) VALUES (?, ?, ?, ?, ?, ?, ?)", [
             (1,'Discount Magic','Perfect Dandelion',35,33,32,31),
             (2,'Discount Magic','Sprint Potion',105,101,97,94),
             (3,'Discount Magic','Perfect Red Rose',350,339,325,315),
@@ -964,7 +967,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (240,'The White House','Compass',11999,11999,11999,11999),
             (241,'The White House','Pewter Tankard',15000,15000,15000,15000)
         ]),
-        ("INSERT OR IGNORE INTO shops (ID, Name, Column, Row, next_update) VALUES (?, ?, ?, ?, ?)", [
+        ("INSERT OR IGNORE INTO shops (ID, Name, `Column`, Row, next_update) VALUES (?, ?, ?, ?, ?)", [
             (1,'Ace Porn','NA','NA',''),
             (2,'Checkers Porn Shop','NA','NA',''),
             (3,'Dark Desires','NA','NA',''),
@@ -991,7 +994,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (24,'White Light','NA','NA',''),
             (25,'Ye Olde Scrolles','NA','NA','')
         ]),
-        ("INSERT OR IGNORE INTO taverns (ID, Column, Row, Name) VALUES (?, ?, ?, ?)", [
+        ("REPLACE INTO taverns (ID, `Column`, Row, Name) VALUES (?, ?, ?, ?)", [
             (1,'Gum','33rd','Abbot''s Tavern'),
             (2,'Knotweed','11th','Archer''s Tavern'),
             (3,'Torment','16th','Baker''s Tavern'),
@@ -1088,7 +1091,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (94,'Anguish','68th','Xendom Tavern'),
             (95,'Pyrites','70th','Ye Olde Gallows Ale House')
         ]),
-        ("INSERT OR IGNORE INTO transits (ID, Column, Row, Name) VALUES (?, ?, ?, ?)", [
+        ("REPLACE INTO transits (ID, `Column`, Row, Name) VALUES (?, ?, ?, ?)", [
             (1,'Mongoose','25th','Calliope'),
             (2,'Zelkova','25th','Clio'),
             (3,'Malachite','25th','Erato'),
@@ -1099,164 +1102,165 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             (8,'Zelkova','75th','Thalia'),
             (9,'Malachite','75th','Urania')
         ]),
-        ("INSERT OR IGNORE INTO userbuildings (ID, Name, Column, Row) VALUES (?, ?, ?, ?)", [
-            (1, 'Ace''s House of Dumont', 'Cedar', '99th'),
-            (2, 'Alatáriël Maenor', 'Diamond', '50th'),
-            (3, 'Alpha Dragon''s and Lyric''s House of Dragon and Flame', 'Amethyst', '90th'),
-            (4, 'AmadisdeGaula''s Stellaburgi', 'Wulfenite', '38th'),
-            (5, 'Andre''s Crypt', 'Ferret', '10th'),
-            (6, 'Annabelle''s Paradise', 'Emerald', '85th'),
-            (7, 'Anthony''s Castle Pacherontis', 'Walrus', '39th'),
-            (8, 'Anthony''s Gero Claw', 'Vulture', '39th'),
-            (9, 'Anthony''s Training Grounds', 'Vulture', '35th'),
-            (10, 'Aphaythean Vineyards', 'Willow', '13th'),
-            (11, 'Archangel''s Castle', 'Beech', '4th'),
-            (12, 'Avant''s Garden', 'Amethyst', '68th'),
-            (13, 'BaShalor''s Rose Garden', 'Cobalt', '41st'),
-            (14, 'Bitercat''s mews', 'Lion', '42nd'),
-            (15, 'Black dragonet''s mansion', 'Oppression', '80th'),
-            (16, 'Blutengel''s Temple of Blood', 'Fear', '13th'),
-            (17, 'Café Damari', 'Zelkova', '68th'),
-            (18, 'Cair Paravel', 'Lion', '27th'),
-            (19, 'Capadocian Castle', 'Larch', '49th'),
-            (20, 'Carnal Desires', 'Ivy', '66th'),
-            (21, 'Castle of Shadows', 'Turquoise', '86th'),
-            (22, 'Castle RavenesQue', 'Raven', 'NCL'),
-            (23, 'ChaosRaven''s Dimensional Tower', 'Killjoy', '23rd'),
-            (24, 'CHASS''s forever-blues hall', 'Torment', '75th'),
-            (25, 'CrimsonClover''s Hideaway', 'Diamond', '85th'),
-            (26, 'CrowsSong''s Blackbird Towers', 'Wulfenite', '3rd'),
-            (27, 'D''dary Manor', 'Aardvark', '1st'),
-            (28, 'Daphne''s Dungeons', 'Malachite', '64th'),
-            (29, 'DarkestDesire''s Chambers', 'Despair', '56th'),
-            (30, 'Darkwolf''s and liquid-vamp''s Country Cottage', 'Wulfenite', '69th'),
-            (31, 'Deaths embrace''s Shadow Keep', 'Holly', '81st'),
-            (32, 'Devil Miyu''s Abeir-Toril', 'Fear', '2nd'),
-            (33, 'Devil Miyu''s Edge of Reason', 'Fear', 'NCL'),
-            (34, 'Devil Miyu''s Lair', 'Fear', '1st'),
-            (35, 'Dreamcatcher Haven', 'Torment', '2nd'),
-            (36, 'Elijah''s Hall of the Lost', 'Zinc', '99th'),
-            (37, 'ElishaDraken''s Sanguine Ankh', 'Nightingale', '59th'),
-            (38, 'Epineux Manoir', 'Olive', '70th'),
-            (39, 'Espy''s Jaded Sorrows', 'Jaded', '69th'),
-            (40, 'Freedom Trade Alliance', 'Amethyst', '46th'),
-            (41, 'Gypsychild''s Caravan', 'Torment', '69th'),
-            (42, 'Halls of Shadow Court', 'Horror', '99th'),
-            (43, 'Hells Gate''s Castle of Destruction', 'Lonely', '45th'),
-            (44, 'Hesu''s Place', 'Raven', '24th'),
-            (45, 'Hexenkessel', 'Jackal', '83rd'),
-            (47, 'Ildiko''s and Brom''s Insanity', 'Killjoy', '53rd'),
-            (48, 'Jacomo Varis'' Shadow Manor', 'Raven', '96th'),
-            (49, 'Jaxi''s and Speedy''s Cave', 'Raven', '23rd'),
-            (50, 'Julia''s Villa', 'Gloom', '76th'),
-            (51, 'King Lestat''s Le Paradis Caché', 'Cobalt', '90th'),
-            (52, 'La Cucina', 'Diamond', '28th'),
-            (53, 'Lady Ophy''s Bougainvillea Mansion', 'Jaded', '84th'),
-            (54, 'LadyFae''s and nitenurse''s Solas Gealaí Caisleán', 'Raven', '76th'),
-            (55, 'Lasc Talon''s Estate', 'Willow', '42nd'),
-            (56, 'Lass'' Lair', 'Vervain', '1st'),
-            (57, 'Liski''s Shadow Phial', 'Gloom', '99th'),
-            (58, 'Lord Galamushi''s Enchanted Mansion', 'Anguish', '52nd'),
-            (59, 'Louvain''s Sanctuary', 'Gibbon', '21st'),
-            (60, 'Majica''s Playground', 'Willow', '50th'),
-            (61, 'Mandruleanu Manor', 'Diamond', '86th'),
-            (62, 'Mansion of Malice', 'Horror', '69th'),
-            (63, 'Marlena''s Wishing Well', 'Fear', '56th'),
-            (64, 'Moirai''s Gate to the Church of Blood', 'Horror', '13th'),
-            (65, 'Moondreamer''s Darkest Desire''s Lighthouse', 'Fear', '9th'),
-            (66, 'Moonlight Gardens', 'Turquoise', '87th'),
-            (67, 'Ms Delgado''s Manor', 'Sorrow', '69th'),
-            (68, 'MyMotherInLaw''s Home for Wayward Ghouls', 'Amethyst', '69th'),
-            (69, 'Narcisssa''s Vineyard', 'Aardvark', '60th'),
-            (70, 'Nemesis'' Asyl', 'Zinc', '85th'),
-            (71, 'NightWatch Headquarters', 'Larch', '51st'),
-            (72, 'Obsidian''s Arboretum', 'Obsidian', '88th'),
-            (73, 'Obsidian''s Castle of Warwick', 'Obsidian', 'NCL'),
-            (74, 'Obsidian''s Château de la Lumière', 'Obsidian', '66th'),
-            (75, 'Obsidian''s château noir', 'Obsidian', '99th'),
-            (76, 'Obsidian''s Hall of Shifting Realms', 'Obsidian', '15th'),
-            (77, 'Obsidian''s Penthouse', 'Obsidian', '29th'),
-            (78, 'Obsidian''s Silver Towers', 'Obsidian', '51st'),
-            (79, 'Obsidian''s Tranquility', 'Obsidian', '80th'),
-            (80, 'Obsidian''s, Phoenixxe''s and Em''s Heaven''s Gate', 'Obsidian', '45th'),
-            (81, 'Occamrazor''s House of Ears', 'Yew', '30th'),
-            (82, 'Ordo Dracul Sanctum', 'Nightingale', '77th'),
-            (83, 'Orgasmerilla''s Warehouse', 'Zinc', '80th'),
-            (84, 'Pace Family Ranch', 'Fir', '69th'),
-            (85, 'Palazzo Lucius', 'Zebra', '27th'),
-            (86, 'Pandrora and CBK''s Chamber of Horrors', 'Torment', '95th'),
-            (87, 'RemipunX''s Sacred Yew', 'Cobalt', '42nd'),
-            (88, 'Renovate''s grove', 'Umbrella', '71st'),
-            (89, 'Saki''s Fondest Wish', 'Nightingale', '17th'),
-            (90, 'Samantha Dawn''s Salacious Sojourn', 'Anguish', '53rd'),
-            (91, 'Sanctuary Hotel', 'Kraken', '27th'),
-            (92, 'Sartori''s Domicile', 'Elm', '1st'),
-            (93, 'SCORPIOUS1''s Tower of Truth', 'Yearning', '58th'),
-            (94, 'Setitevampyr''s temple', 'Raven', '50th'),
-            (95, 'Shaarinya`s Sanguine Sanctuary', 'Raven', '77th'),
-            (96, 'Shadow bat''s Sanctorium', 'Cobalt', '76th'),
-            (97, 'SIE Compound', 'Raven', '13th'),
-            (98, 'Sitrence''s Lab', 'Ferret', '3rd'),
-            (99, 'Solanea''s Family Home', 'Ruby', '56th'),
-            (100, 'The Angelarium', 'Zinc', 'NCL'),
-            (101, 'St. John Bathhouse', 'Sycamore', '76th'),
-            (102, 'Starreagle''s Paradise Lair', 'Beryl', '24th'),
-            (103, 'Steele Industries', 'Umbrella', '44th'),
-            (104, 'Stormy jayne''s web', 'Nickel', '99th'),
-            (105, 'Talon Castle', 'Willow', '35th'),
-            (106, 'tejas_dragon''s Lair', 'Zelkova', '69th'),
-            (107, 'The Ailios Asylum', 'Amethyst', '36th'),
-            (108, 'The Belly of the Whale', 'Amethyst', '2nd'),
-            (109, 'The Calignite', 'Eagle', '16th'),
-            (110, 'The COVE', 'Knowteed', '51st'),
-            (111, 'The Dragons Lair Club', 'Vervain', '39th'),
-            (112, 'The Eternal Spiral', 'Anguish', '69th'),
-            (113, 'The goatsucker''s lair', 'Yak', '13th'),
-            (114, 'The Halls of Heorot', 'Jaded', '75th'),
-            (115, 'The House of Night', 'Walrus', '38th'),
-            (116, 'The Inner Circle Manor', 'Diamond', '26th'),
-            (117, 'The Ivory Tower', 'Zelkova', '76th'),
-            (118, 'The Ixora Estate', 'Lead', '48th'),
-            (119, 'The Kyoto Club', 'Lion', '22nd'),
-            (120, 'The Lokason Myrkrasetur', 'Wulfenite', '40th'),
-            (121, 'The Path of Enlightenment Castle', 'Willow', '80th'),
-            (122, 'The RavenBlack Bite', 'Oppression', '40th'),
-            (123, 'The Reynolds'' Estate', 'Beryl', '23rd'),
-            (124, 'The River Passage', 'Yew', '33rd'),
-            (125, 'The Sakura Garden', 'Nickel', '77th'),
-            (126, 'The Sanctum of Vermathrax-rex and Bellina', 'Vexation', '99th'),
-            (127, 'The Sanguinarium', 'Fear', '4th'),
-            (128, 'The Scythe''s Negotiation Offices', 'Vauxite', '88th'),
-            (129, 'The Sepulchre of Shadows', 'Ennui', '1st'),
-            (130, 'The Tower of Thorns', 'Pilchard', '70th'),
-            (131, 'The Towers of the Crossed Swords', 'Torment', '66th'),
-            (132, 'The White House', 'Nervous', '75th'),
-            (133, 'University of Vampiric Enlightenment', 'Yak', '80th'),
-            (134, 'Virgo''s obsidian waygate', 'Obsidian', '2nd'),
-            (135, 'Vulture''s Pagoda', 'Vulture', '50th'),
-            (136, 'Wilde Sanctuary', 'Willow', '51st'),
-            (137, 'Wilde Wolfe Estate', 'Vervain', '50th'),
-            (138, 'Willhelm''s Warrior House', 'Horror', '53rd'),
-            (139, 'Willow Lake Manse', 'Willow', '99th'),
-            (140, 'Willow Woods'' & The Ent Moot', 'Willow', '54th'),
-            (141, 'Wolfshadow''s and Crazy''s RBC Casino', 'Lead', '72nd'),
-            (142, 'Wyndcryer''s TygerNight''s and Bambi''s Lair', 'Unicorn', '77th'),
-            (143, 'Wyvernhall', 'Ivy', '38th'),
-            (144, 'X', 'Emerald', 'NCL'),
-            (145, 'Requiem of Hades', 'Walrus', '41st')
+        ("REPLACE INTO userbuildings (ID, Name, `Column`, Row) VALUES (?, ?, ?, ?)", [
+            (1, "Ace's House of Dumont", "Cedar", "99th"),
+            (2, "Alatáriël Maenor", "Diamond", "50th"),
+            (3, "Alpha Dragon's and Lyric's House of Dragon and Flame", "Amethyst", "90th"),
+            (4, "AmadisdeGaula's Stellaburgi", "Wulfenite", "38th"),
+            (5, "Andre's Crypt", "Ferret", "10th"),
+            (6, "Annabelle's Paradise", "Emerald", "85th"),
+            (7, "Anthony's Castle Pacherontis", "Walrus", "39th"),
+            (8, "Anthony's Gero Claw", "Vulture", "39th"),
+            (9, "Anthony's Training Grounds", "Vulture", "35th"),
+            (10, "Aphaythean Vineyards", "Willow", "13th"),
+            (11, "Archangel's Castle", "Beech", "4th"),
+            (12, "Avant's Garden", "Amethyst", "68th"),
+            (13, "BaShalor's Rose Garden", "Cobalt", "41st"),
+            (14, "Bitercat's mews", "Lion", "42nd"),
+            (15, "Black dragonet's mansion", "Oppression", "80th"),
+            (16, "Blutengel's Temple of Blood", "Fear", "13th"),
+            (17, "Café Damari", "Zelkova", "68th"),
+            (18, "Cair Paravel", "Lion", "27th"),
+            (19, "Capadocian Castle", "Larch", "49th"),
+            (20, "Carnal Desires", "Ivy", "66th"),
+            (21, "Castle of Shadows", "Turquoise", "86th"),
+            (22, "Castle RavenesQue", "Raven", "NCL"),
+            (23, "ChaosRaven's Dimensional Tower", "Killjoy", "23rd"),
+            (24, "CHASS's forever-blues hall", "Torment", "75th"),
+            (25, "CrimsonClover's Hideaway", "Diamond", "85th"),
+            (26, "CrowsSong's Blackbird Towers", "Wulfenite", "3rd"),
+            (27, "D'dary Manor", "Aardvark", "1st"),
+            (28, "Daphne's Dungeons", "Malachite", "64th"),
+            (29, "DarkestDesire's Chambers", "Despair", "56th"),
+            (30, "Darkwolf's and liquid-vamp's Country Cottage", "Wulfenite", "69th"),
+            (31, "Deamhan Estate", "Yak", "81st"),
+            (32, "Deaths embrace's Shadow Keep", "Holly", "81st"),
+            (33, "Devil Miyu's Abeir-Toril", "Fear", "2nd"),
+            (34, "Devil Miyu's Edge of Reason", "Fear", "NCL"),
+            (35, "Devil Miyu's Lair", "Fear", "1st"),
+            (36, "Dreamcatcher Haven", "Torment", "2nd"),
+            (37, "Elijah's Hall of the Lost", "Zinc", "99th"),
+            (38, "ElishaDraken's Sanguine Ankh", "Nightingale", "59th"),
+            (39, "Epineux Manoir", "Olive", "70th"),
+            (40, "Espy's Jaded Sorrows", "Jaded", "69th"),
+            (41, "Freedom Trade Alliance", "Amethyst", "46th"),
+            (42, "Gypsychild's Caravan", "Torment", "69th"),
+            (43, "Halls of Shadow Court", "Horror", "99th"),
+            (44, "Hells Gate's Castle of Destruction", "Lonely", "45th"),
+            (45, "Hesu's Place", "Raven", "24th"),
+            (46, "Hexenkessel", "Jackal", "83rd"),
+            (47, "Ildiko's and Brom's Insanity", "Killjoy", "53rd"),
+            (48, "Jacomo Varis' Shadow Manor", "Raven", "96th"),
+            (49, "Jaxi's and Speedy's Cave", "Raven", "23rd"),
+            (50, "Julia's Villa", "Gloom", "76th"),
+            (51, "King Lestat's Le Paradis Caché", "Cobalt", "90th"),
+            (52, "La Cucina", "Diamond", "28th"),
+            (53, "Lady Ophy's Bougainvillea Mansion", "Jaded", "84th"),
+            (54, "LadyFae's and nitenurse's Solas Gealaí Caisleán", "Raven", "76th"),
+            (55, "Lasc Talon's Estate", "Willow", "42nd"),
+            (56, "Lass' Lair", "Vervain", "1st"),
+            (57, "Liski's Shadow Phial", "Gloom", "99th"),
+            (58, "Lord Galamushi's Enchanted Mansion", "Anguish", "52nd"),
+            (59, "Louvain's Sanctuary", "Gibbon", "21st"),
+            (60, "Majica's Playground", "Willow", "50th"),
+            (61, "Mandruleanu Manor", "Diamond", "86th"),
+            (62, "Mansion of Malice", "Horror", "69th"),
+            (63, "Marlena's Wishing Well", "Fear", "56th"),
+            (64, "Moirai's Gate to the Church of Blood", "Horror", "13th"),
+            (65, "Moondreamer's Darkest Desire's Lighthouse", "Fear", "9th"),
+            (66, "Moonlight Gardens", "Turquoise", "87th"),
+            (67, "Ms Delgado's Manor", "Sorrow", "69th"),
+            (68, "MyMotherInLaw's Home for Wayward Ghouls", "Amethyst", "69th"),
+            (69, "Narcisssa's Vineyard", "Aardvark", "60th"),
+            (70, "Nemesis' Asyl", "Zinc", "85th"),
+            (71, "NightWatch Headquarters", "Larch", "51st"),
+            (72, "Obsidian's Arboretum", "Obsidian", "88th"),
+            (73, "Obsidian's Castle of Warwick", "Obsidian", "NCL"),
+            (74, "Obsidian's Château de la Lumière", "Obsidian", "66th"),
+            (75, "Obsidian's château noir", "Obsidian", "99th"),
+            (76, "Obsidian's Hall of Shifting Realms", "Obsidian", "15th"),
+            (77, "Obsidian's Penthouse", "Obsidian", "29th"),
+            (78, "Obsidian's Silver Towers", "Obsidian", "51st"),
+            (79, "Obsidian's Tranquility", "Obsidian", "80th"),
+            (80, "Obsidian's, Phoenixxe's and Em's Heaven's Gate", "Obsidian", "45th"),
+            (81, "Occamrazor's House of Ears", "Yew", "30th"),
+            (82, "Ordo Dracul Sanctum", "Nightingale", "77th"),
+            (83, "Orgasmerilla's Warehouse", "Zinc", "80th"),
+            (84, "Pace Family Ranch", "Fir", "69th"),
+            (85, "Palazzo Lucius", "Zebra", "27th"),
+            (86, "Pandrora and CBK's Chamber of Horrors", "Torment", "95th"),
+            (87, "RemipunX's Sacred Yew", "Cobalt", "42nd"),
+            (88, "Renovate's grove", "Umbrella", "71st"),
+            (89, "Saki's Fondest Wish", "Nightingale", "17th"),
+            (90, "Samantha Dawn's Salacious Sojourn", "Anguish", "53rd"),
+            (91, "Sanctuary Hotel", "Kraken", "27th"),
+            (92, "Sartori's Domicile", "Elm", "1st"),
+            (93, "SCORPIOUS1's Tower of Truth", "Yearning", "58th"),
+            (94, "Setitevampyr's temple", "Raven", "50th"),
+            (95, "Shaarinya`s Sanguine Sanctuary", "Raven", "77th"),
+            (96, "Shadow bat's Sanctorium", "Cobalt", "76th"),
+            (97, "SIE Compound", "Raven", "13th"),
+            (98, "Sitrence's Lab", "Ferret", "3rd"),
+            (99, "Solanea's Family Home", "Ruby", "56th"),
+            (100, "The Angelarium", "Zinc", "NCL"),
+            (101, "St. John Bathhouse", "Sycamore", "76th"),
+            (102, "Starreagle's Paradise Lair", "Beryl", "24th"),
+            (103, "Steele Industries", "Umbrella", "44th"),
+            (104, "Stormy jayne's web", "Nickel", "99th"),
+            (105, "Talon Castle", "Willow", "35th"),
+            (106, "tejas_dragon's Lair", "Zelkova", "69th"),
+            (107, "The Ailios Asylum", "Amethyst", "36th"),
+            (108, "The Belly of the Whale", "Amethyst", "2nd"),
+            (109, "The Calignite", "Eagle", "16th"),
+            (110, "The COVE", "Knotweed", "51st"),
+            (111, "The Dragons Lair Club", "Vervain", "39th"),
+            (112, "The Eternal Spiral", "Anguish", "69th"),
+            (113, "The goatsucker's lair", "Yak", "13th"),
+            (114, "The Halls of Heorot", "Jaded", "75th"),
+            (115, "The House of Night", "Walrus", "38th"),
+            (116, "The Inner Circle Manor", "Diamond", "26th"),
+            (117, "The Ivory Tower", "Zelkova", "76th"),
+            (118, "The Ixora Estate", "Lead", "48th"),
+            (119, "The Kyoto Club", "Lion", "22nd"),
+            (120, "The Lokason Myrkrasetur", "Wulfenite", "40th"),
+            (121, "The Path of Enlightenment Castle", "Willow", "80th"),
+            (122, "The RavenBlack Bite", "Oppression", "40th"),
+            (123, "The Reynolds' Estate", "Beryl", "23rd"),
+            (124, "The River Passage", "Yew", "33rd"),
+            (125, "The Sakura Garden", "Nickel", "77th"),
+            (126, "The Sanctum of Vermathrax-rex and Bellina", "Vexation", "99th"),
+            (127, "The Sanguinarium", "Fear", "4th"),
+            (128, "The Scythe's Negotiation Offices", "Vauxite", "88th"),
+            (129, "The Sepulchre of Shadows", "Ennui", "1st"),
+            (130, "The Tower of Thorns", "Pilchard", "70th"),
+            (131, "The Towers of the Crossed Swords", "Torment", "66th"),
+            (132, "The White House", "Nervous", "75th"),
+            (133, "University of Vampiric Enlightenment", "Yak", "80th"),
+            (134, "Virgo's obsidian waygate", "Obsidian", "2nd"),
+            (135, "Vulture's Pagoda", "Vulture", "50th"),
+            (136, "Wilde Sanctuary", "Willow", "51st"),
+            (137, "Wilde Wolfe Estate", "Vervain", "50th"),
+            (138, "Willhelm's Warrior House", "Horror", "53rd"),
+            (139, "Willow Lake Manse", "Willow", "99th"),
+            (140, "Willow Woods' & The Ent Moot", "Willow", "54th"),
+            (141, "Wolfshadow's and Crazy's RBC Casino", "Lead", "72nd"),
+            (142, "Wyndcryer's TygerNight's and Bambi's Lair", "Unicorn", "77th"),
+            (143, "Wyvernhall", "Ivy", "38th"),
+            (144, "X", "Emerald", "NCL"),
+            (145, "Requiem of Hades", "Walrus", "41st")
         ]),
-        ("INSERT OR IGNORE INTO discord_servers (id, name, invite_link) VALUES (?, ?, ?)", [
-            (1, "Ab Antiquo Headquarters", "https://discord.gg/AhPEzkJyA4"),
-            (2, "Hellfire Club", "https://discord.gg/qZCbbKEt3z"),
-            (3, "RB Improvement Group", "https://discord.gg/8ent8jn54u"),
-            (4, "RBCH", "https://discord.gg/ktdG9FZ"),
-            (5, "Raven Black: Boroughs and Barrios", "https://discord.gg/RTSXJ5tC4d"),
-            (6, "RavenBlack Community Center", "https://discord.gg/SVMmGcvNCV"),
-            (7, "The Moon over Orion", "https://discord.gg/EArPr7vqHC"),
-            (8, "The Ravenblack Historical Society", "https://discord.gg/zqPXpw8sMw"),
-            (9, "rêverie", "https://discord.gg/jAVHpGvgCf")
+        ("REPLACE INTO discord_servers (id, name, invite_link) VALUES (?, ?, ?)", [
+            (1, "RBC Community Map Hub", "https://discord.gg/rKamEZvK6X"),
+            (2, "Ab Antiquo Headquarters", "https://discord.gg/AhPEzkJyA4"),
+            (3, "Hellfire Club", "https://discord.gg/qZCbbKEt3z"),
+            (4, "RB Improvement Group", "https://discord.gg/8ent8jn54u"),
+            (5, "RBCH", "https://discord.gg/ktdG9FZ"),
+            (6, "Raven Black: Boroughs and Barrios", "https://discord.gg/RTSXJ5tC4d"),
+            (7, "RavenBlack Community Center", "https://discord.gg/SVMmGcvNCV"),
+            (8, "The Moon over Orion", "https://discord.gg/EArPr7vqHC"),
+            (9, "The Ravenblack Historical Society", "https://discord.gg/zqPXpw8sMw"),
+            (10, "rêverie", "https://discord.gg/jAVHpGvgCf")
         ])
-
     ]
     for query, data in initial_data:
         try:
@@ -1300,6 +1304,7 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
                     )
                 """)
                 try:
+                    # noinspection SqlResolve
                     cursor.execute("""
                         INSERT INTO custom_css (element, value, profile_name)
                         SELECT element, value, 'Default' FROM custom_css_old
@@ -1326,9 +1331,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
                     )
                 """)
                 try:
+                    # noinspection SqlResolve
                     cursor.execute("""
-                        INSERT INTO guilds (ID, Name, Column, Row, next_update)
-                        SELECT ID, Name, Column, Row, next_update FROM guilds_old
+                        INSERT INTO guilds (ID, Name, `Column`, Row, next_update)
+                        SELECT ID, Name, `Column`, `Row`, next_update FROM guilds_old
                     """)
                     logging.info("Migrated old guilds data successfully.")
                 except sqlite3.Error as e:
@@ -1353,9 +1359,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
                     )
                 """)
                 try:
+                    # noinspection SqlResolve
                     cursor.execute("""
-                        INSERT INTO shops (ID, Name, Column, Row, next_update)
-                        SELECT ID, Name, Column, Row, next_update FROM shops_old
+                        INSERT INTO shops (ID, Name, `Column`, Row, next_update)
+                        SELECT ID, Name, `Column`, `Row`, next_update FROM shops_old
                     """)
                     logging.info("Migrated old shops data successfully.")
                 except sqlite3.Error as e:
@@ -1458,147 +1465,253 @@ elif not initialize_database(DB_PATH):
 
 def load_data() -> tuple:
     """
-    Load map-related data from the SQLite database efficiently.
+    Load map-related data from the SQLite database.
 
-    Also loads the last active character and their most recent destination.
+    Also loads:
+    - keybind configuration
+    - active CSS profile
+    - last active character
+    - most recent destination
     """
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
 
-            # Coordinate mappings
-            cursor.execute("SELECT `Name`, `Coordinate` FROM `columns`")
-            columns = {row[0]: row[1] for row in cursor.fetchall()}
-            cursor.execute("SELECT `Name`, `Coordinate` FROM `rows`")
-            rows = {row[0]: row[1] for row in cursor.fetchall()}
+            # -----------------------
+            # Coordinate Mappings
+            # -----------------------
 
-            def to_coords(col_name: str, row_name: str) -> tuple[int, int]:
+            cursor.execute("SELECT Name, Coordinate FROM columns")
+            columns = {name: coord for name, coord in cursor.fetchall()}
+
+            cursor.execute("SELECT Name, Coordinate FROM rows")
+            rows = {name: coord for name, coord in cursor.fetchall()}
+
+            def to_coords(col_name: str, row_name: str) -> tuple[int | None, int | None]:
                 if col_name not in columns or row_name not in rows:
-                    logging.warning(f"Could not resolve coordinates for {col_name} & {row_name}")
+                    logging.warning(
+                        "Could not resolve coordinates for %s & %s",
+                        col_name,
+                        row_name,
+                    )
                     return None, None
+                return columns[col_name] + 1, rows[row_name] + 1
 
-                col = columns[col_name] + 1
-                row = rows[row_name] + 1
-                return col, row
+            # -----------------------
+            # Banks (string-based)
+            # -----------------------
 
-            # Banks
-            banks_coordinates = {}
-            cursor.execute("SELECT `Column`, `Row`, Name, ID FROM banks")
-            for col_name, row_name, _, _ in cursor.fetchall():
+            banks_coordinates: dict[str, tuple[str, str]] = {}
+            cursor.execute("SELECT Column, Row FROM banks")
+            for col_name, row_name in cursor.fetchall():
                 banks_coordinates[f"{col_name} & {row_name}"] = (col_name, row_name)
 
-            # Other coordinate-based structures
+            # -----------------------
+            # Coordinate-Based Entities
+            # -----------------------
+
             taverns_coordinates = {
                 name: to_coords(col, row)
-                for name, col, row in cursor.execute("SELECT Name, `Column`, `Row` FROM taverns")
+                for name, col, row in cursor.execute(
+                    "SELECT Name, Column, Row FROM taverns"
+                )
             }
+
             transits_coordinates = {
                 name: to_coords(col, row)
-                for name, col, row in cursor.execute("SELECT Name, `Column`, `Row` FROM transits")
+                for name, col, row in cursor.execute(
+                    "SELECT Name, Column, Row FROM transits"
+                )
             }
+
             user_buildings_coordinates = {
                 name: to_coords(col, row)
-                for name, col, row in cursor.execute("SELECT Name, `Column`, `Row` FROM userbuildings")
+                for name, col, row in cursor.execute(
+                    "SELECT Name, Column, Row FROM userbuildings"
+                )
             }
 
-            # Color mappings
-            color_mappings = {}
-            for type_, color in cursor.execute("SELECT Type, Color FROM color_mappings"):
-                try:
-                    qcolor = PySide6.QtGui.QColor(color)
-                    if not qcolor.isValid():
-                        logging.warning(f"Invalid color for type '{type_}': '{color}'")
-                    color_mappings[type_] = qcolor
-                except Exception as e:
-                    logging.error(f"Failed to load QColor for '{type_}': {e}")
-                    color_mappings[type_] = PySide6.QtGui.QColor("#000000")
+            # -----------------------
+            # Color Mappings
+            # -----------------------
 
-            # Shops and Guilds
-            shops_coordinates = {}
-            for name, col, row in cursor.execute("SELECT Name, `Column`, `Row` FROM shops"):
-                if col != "NA" and row != "NA":
-                    shops_coordinates[name] = to_coords(col, row)
-            guilds_coordinates = {}
-            for name, col, row in cursor.execute("SELECT Name, `Column`, `Row` FROM guilds"):
-                if col != "NA" and row != "NA":
-                    guilds_coordinates[name] = to_coords(col, row)
+            color_mappings: dict[str, PySide6.QtGui.QColor] = {}
+            for type_, color in cursor.execute(
+                    "SELECT type, color FROM color_mappings"
+            ):
+                qcolor = PySide6.QtGui.QColor(color)
+                if not qcolor.isValid():
+                    logging.warning(
+                        "Invalid color value for '%s': %s",
+                        type_,
+                        color,
+                    )
+                    qcolor = PySide6.QtGui.QColor("#000000")
+                color_mappings[type_] = qcolor
 
+            # -----------------------
+            # Shops & Guilds
+            # -----------------------
+
+            shops_coordinates = {
+                name: to_coords(col, row)
+                for name, col, row in cursor.execute(
+                    "SELECT Name, Column, Row FROM shops"
+                )
+                if col != "NA" and row != "NA"
+            }
+
+            guilds_coordinates = {
+                name: to_coords(col, row)
+                for name, col, row in cursor.execute(
+                    "SELECT Name, Column, Row FROM guilds"
+                )
+                if col != "NA" and row != "NA"
+            }
+
+            # -----------------------
             # Points of Interest
-            places_of_interest_coordinates = {}
-            cursor.execute("SELECT Name, `Column`, `Row` FROM placesofinterest")
-            rows_data = cursor.fetchall()
+            # -----------------------
 
-            logging.debug("Resolved POI coordinates:")
-            for name, col, row in rows_data:
+            places_of_interest_coordinates: dict[str, tuple[int, int]] = {}
+            cursor.execute("SELECT Name, Column, Row FROM placesofinterest")
+
+            for name, col, row in cursor.fetchall():
                 coords = to_coords(col, row)
                 if coords == (None, None):
-                    logging.warning(f"Skipping POI {name} due to unresolved coordinates: {col}, {row}")
+                    logging.warning(
+                        "Skipping POI '%s' due to unresolved coordinates (%s, %s)",
+                        name,
+                        col,
+                        row,
+                    )
                 else:
                     places_of_interest_coordinates[name] = coords
-                    logging.debug(f"{name}: {coords}")
 
-            # Load settings
-            cursor.execute("SELECT setting_value FROM settings WHERE setting_name = 'keybind_config'")
+            # -----------------------
+            # Settings
+            # -----------------------
+
+            cursor.execute(
+                "SELECT setting_value FROM settings WHERE setting_name = 'keybind_config'"
+            )
             row = cursor.fetchone()
             keybind_config = int(row[0]) if row else 1
 
-            cursor.execute("SELECT setting_value FROM settings WHERE setting_name = 'css_profile'")
+            cursor.execute(
+                "SELECT setting_value FROM settings WHERE setting_name = 'css_profile'"
+            )
             row = cursor.fetchone()
             current_css_profile = row[0] if row else "Default"
 
-            # Load last active character
+            # -----------------------
+            # Last Active Character
+            # -----------------------
+
             selected_character = None
             last_destination = None
-            cursor.execute("SELECT character_id FROM last_active_character LIMIT 1")
-            row = cursor.fetchone()
-            character_id = row[0] if row else None
 
-            if character_id:
-                cursor.execute("SELECT id, name, password FROM characters WHERE id = ?", (character_id,))
-                char_row = cursor.fetchone()
-                if char_row:
+            cursor.execute(
+                "SELECT character_id FROM last_active_character LIMIT 1"
+            )
+            row = cursor.fetchone()
+
+            if row:
+                character_id = row[0]
+                cursor.execute(
+                    "SELECT id, name, password FROM characters WHERE id = ?",
+                    (character_id,),
+                )
+                char = cursor.fetchone()
+
+                if char:
                     selected_character = {
-                        "id": char_row[0],
-                        "name": char_row[1],
-                        "password": char_row[2]
+                        "id": char[0],
+                        "name": char[1],
+                        "password": char[2],
                     }
 
-                    # Load last destination for this character
                     cursor.execute(
-                        "SELECT col, row FROM destinations WHERE character_id = ? ORDER BY timestamp DESC LIMIT 1",
-                        (character_id,)
+                        """
+                        SELECT col, row
+                        FROM destinations
+                        WHERE character_id = ?
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                        """,
+                        (character_id,),
                     )
-                    row = cursor.fetchone()
-                    if row:
-                        last_destination = (row[0], row[1])
+                    dest = cursor.fetchone()
+                    if dest:
+                        last_destination = (dest[0], dest[1])
 
-            logging.debug("Loaded data from database successfully")
+            logging.debug("Database data loaded successfully")
+
             return (
-                columns, rows, banks_coordinates, taverns_coordinates, transits_coordinates,
-                user_buildings_coordinates, color_mappings, shops_coordinates, guilds_coordinates,
-                places_of_interest_coordinates, keybind_config, current_css_profile,
-                selected_character, last_destination
+                columns,
+                rows,
+                banks_coordinates,
+                taverns_coordinates,
+                transits_coordinates,
+                user_buildings_coordinates,
+                color_mappings,
+                shops_coordinates,
+                guilds_coordinates,
+                places_of_interest_coordinates,
+                keybind_config,
+                current_css_profile,
+                selected_character,
+                last_destination,
             )
 
-    except sqlite3.Error as e:
-        logging.error(f"Failed to load data from database {DB_PATH}: {e}")
+    except sqlite3.Error as exc:
+        logging.error(
+            "Failed to load data from database %s: %s",
+            DB_PATH,
+            exc,
+        )
         raise
 
+# -----------------------
+# Load Data at Startup
+# -----------------------
 
-# Load data at startup
 try:
     (
-        columns, rows, banks_coordinates, taverns_coordinates, transits_coordinates,
-        user_buildings_coordinates, color_mappings, shops_coordinates, guilds_coordinates,
-        places_of_interest_coordinates, keybind_config, current_css_profile,
-        selected_character, last_destination
+        columns,
+        rows,
+        banks_coordinates,
+        taverns_coordinates,
+        transits_coordinates,
+        user_buildings_coordinates,
+        color_mappings,
+        shops_coordinates,
+        guilds_coordinates,
+        places_of_interest_coordinates,
+        keybind_config,
+        current_css_profile,
+        selected_character,
+        last_destination,
     ) = load_data()
+
 except sqlite3.Error:
-    logging.critical("Database load failed. Using fallback empty data.")
-    columns = rows = taverns_coordinates = transits_coordinates = user_buildings_coordinates = \
-        shops_coordinates = guilds_coordinates = places_of_interest_coordinates = {}
+    logging.critical(
+        "Database load failed. Falling back to empty runtime data."
+    )
+
+    columns = rows = {}
     banks_coordinates = {}
-    color_mappings = {'default': PySide6.QtGui.QColor('#000000')}  # Minimal fallback
+    taverns_coordinates = {}
+    transits_coordinates = {}
+    user_buildings_coordinates = {}
+    shops_coordinates = {}
+    guilds_coordinates = {}
+    places_of_interest_coordinates = {}
+
+    color_mappings = {
+        "default": PySide6.QtGui.QColor("#000000")
+    }
+
     keybind_config = 1
     current_css_profile = "Default"
     selected_character = None

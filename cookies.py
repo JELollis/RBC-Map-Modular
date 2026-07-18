@@ -1,89 +1,116 @@
 from imports import *
 from constants import *
-# -----------------------
-# Webview Cookie Database
-# -----------------------
+
 
 def save_cookie_to_db(cookie: QNetworkCookie) -> bool:
     """
-    Save or update a single cookie in the SQLite database, overwriting if it exists.
+    Save or update a single cookie in the SQLite database.
 
-    Args:
-        cookie (QNetworkCookie): The cookie to save or update.
-
-    Returns:
-        bool: True if the cookie was saved/updated successfully, False otherwise.
+    Cookies are uniquely identified by (name, domain, path).
     """
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            name = cookie.name().data().decode('utf-8', errors='replace')
+
+            name = cookie.name().data().decode("utf-8", errors="replace")
+            value = cookie.value().data().decode("utf-8", errors="replace")
             domain = cookie.domain()
             path = cookie.path()
-            value = cookie.value().data().decode('utf-8', errors='replace')
-            # noinspection PyUnresolvedReferences
-            expiration = cookie.expirationDate().toString(Qt.ISODate) if not cookie.isSessionCookie() else None
+
+            expiration = (
+                cookie.expirationDate().toString(Qt.DateFormat.ISODate)
+                if not cookie.isSessionCookie()
+                else None
+            )
+
             secure = int(cookie.isSecure())
             httponly = int(cookie.isHttpOnly())
 
-            # Use UPSERT (INSERT OR REPLACE) to overwrite existing cookies based on name, domain, and path
-            cursor.execute('''
-                INSERT OR REPLACE INTO cookies (name, value, domain, path, expiration, secure, httponly)
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO cookies
+                    (name, value, domain, path, expiration, secure, httponly)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (name, value, domain, path, expiration, secure, httponly))
+                """,
+                (name, value, domain, path, expiration, secure, httponly),
+            )
 
             conn.commit()
-            logging.debug(f"Saved/updated cookie: {name} for domain {domain}")
+
+            logging.debug(
+                "Saved/updated cookie '%s' for domain '%s'",
+                name,
+                domain,
+            )
             return True
-    except sqlite3.Error as e:
-        logging.error(f"Failed to save/update cookie {cookie.name().data()}: {e}")
+
+    except sqlite3.Error as exc:
+        logging.error(
+            "Failed to save/update cookie '%s': %s",
+            cookie.name().data().decode("utf-8", errors="replace"),
+            exc,
+        )
         return False
 
-def load_cookies_from_db() -> List[QNetworkCookie]:
+def load_cookies_from_db() -> list[QNetworkCookie]:
     """
-    Load all cookies from the SQLite database.
+    Load all stored cookies from the SQLite database.
+    """
+    cookies: list[QNetworkCookie] = []
 
-    Returns:
-        list[QNetworkCookie]: List of QNetworkCookie objects from the database.
-    """
-    cookies = []
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT name, value, domain, path, expiration, secure, httponly FROM cookies')
+            cursor.execute(
+                """
+                SELECT name, value, domain, path, expiration, secure, httponly
+                FROM cookies
+                """
+            )
+
             for name, value, domain, path, expiration, secure, httponly in cursor.fetchall():
                 cookie = QNetworkCookie(
-                    name.encode('utf-8'),
-                    value.encode('utf-8')
+                    name.encode("utf-8"),
+                    value.encode("utf-8"),
                 )
                 cookie.setDomain(domain)
                 cookie.setPath(path)
+
                 if expiration:
-                    # noinspection PyUnresolvedReferences
-                    cookie.setExpirationDate(QDateTime.fromString(expiration, Qt.ISODate))
+                    cookie.setExpirationDate(
+                        QDateTime.fromString(
+                            expiration,
+                            Qt.DateFormat.ISODate,
+                        )
+                    )
+
                 cookie.setSecure(bool(secure))
                 cookie.setHttpOnly(bool(httponly))
                 cookies.append(cookie)
-            logging.debug(f"Loaded {len(cookies)} cookies from database")
-    except sqlite3.Error as e:
-        logging.error(f"Failed to load cookies: {e}")
+
+        logging.debug(
+            "Loaded %d cookies from database",
+            len(cookies),
+        )
+
+    except sqlite3.Error as exc:
+        logging.error("Failed to load cookies: %s", exc)
+
     return cookies
 
 def clear_cookie_db() -> bool:
     """
-    Clear all cookies from the SQLite database.
-
-    Returns:
-        bool: True if cookies were cleared successfully, False otherwise.
+    Remove all cookies from the SQLite database.
     """
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM cookies')
+            cursor.execute("DELETE FROM cookies")
             conn.commit()
-            logging.info("Cleared all cookies from database")
-            return True
-    except sqlite3.Error as e:
-        logging.error(f"Failed to clear cookies: {e}")
-        return False
 
+        logging.info("Cleared all cookies from database")
+        return True
+
+    except sqlite3.Error as exc:
+        logging.error("Failed to clear cookies: %s", exc)
+        return False

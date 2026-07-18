@@ -1,66 +1,6 @@
 from imports import *
 from constants import *
 
-# -----------------------
-# Theme Application
-# -----------------------
-
-def apply_theme_to_widget(widget: QWidget, color_mappings: dict) -> None:
-    """Apply the selected theme colors to the given widget's stylesheet."""
-    try:
-        bg_color = color_mappings.get('background', PySide6.QtGui.QColor('white')).name()
-        text_color = color_mappings.get('text_color', PySide6.QtGui.QColor('black')).name()
-        btn_color = color_mappings.get('button_color', PySide6.QtGui.QColor('lightgrey')).name()
-        btn_hover_color = color_mappings.get('button_hover_color', PySide6.QtGui.QColor('grey')).name()
-        btn_pressed_color = color_mappings.get('button_pressed_color', PySide6.QtGui.QColor('darkgrey')).name()
-        btn_border_color = color_mappings.get('button_border_color', PySide6.QtGui.QColor('black')).name()
-
-        widget.setStyleSheet(
-            f"""
-            QWidget {{
-                background-color: {bg_color};
-                color: {text_color};
-            }}
-            QPushButton {{
-                background-color: {btn_color};
-                color: {text_color};
-                border: 2px solid {btn_border_color};
-                border-radius: 6px;
-                padding: 5px;
-            }}
-            QPushButton:hover {{
-                background-color: {btn_hover_color};
-            }}
-            QPushButton:pressed {{
-                background-color: {btn_pressed_color};
-            }}
-            QLabel {{
-                color: {text_color};
-            }}
-            QComboBox {{
-                background-color: {bg_color};
-                color: {text_color};
-                border: 2px solid {btn_border_color};
-                border-radius: 4px;
-                padding: 4px;
-            }}
-            QListWidget {{
-                background-color: {bg_color};
-                color: {text_color};
-                border: 1px solid {btn_border_color};
-            }}
-            QLineEdit {{
-                background-color: {bg_color};
-                color: {text_color};
-                border: 1px solid {btn_border_color};
-                padding: 3px;
-            }}
-            """
-        )
-        logging.debug(f"Theme applied to {widget.__class__.__name__}")
-    except Exception as e:
-        logging.error(f"Failed to apply theme to {widget.__class__.__name__}: {e}")
-        widget.setStyleSheet("")
 
 class ThemeCustomizationDialog(QDialog):
     """

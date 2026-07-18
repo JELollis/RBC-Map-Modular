@@ -1,123 +1,124 @@
+"""
+Shared imports and runtime environment setup for the RBC Community Map.
+
+This module centralizes every standard-library and third-party import used
+across the modular application so individual modules can simply do
+``from imports import *``. It mirrors the import surface of the original
+monolithic ``main_0.13.3.0.py`` build.
+"""
+
+# -----------------------
+# Standard Library
+# -----------------------
+
 import logging
 import logging.handlers
-import subprocess
-import sys
-
-# List of required modules with pip package names (some differ from import names)
-required_modules = {
-    'PySide6.QtCore': 'PySide6',
-    'PySide6.QtGui': 'PySide6',
-    'PySide6.QtNetwork': 'PySide6',
-    'PySide6.QtWebChannel': 'PySide6',
-    'PySide6.QtWebEngineWidgets': 'PySide6',
-    'PySide6.QtWidgets': 'PySide6',
-    'bs4': 'beautifulsoup4',
-    'datetime': 'datetime',        # Built-in
-    're': 're',                    # Built-in
-    'discord': 'discord.py',
-    'requests': 'requests',
-    'sqlite3': 'sqlite3',          # Built-in
-    'time': 'time',                # Built-in
-    'webbrowser': 'webbrowser'     # Built-in
-}
-
-def check_and_install_modules(modules: dict[str, str]) -> bool:
-    missing_modules = []
-    pip_installable = []
-
-    for module, pip_name in modules.items():
-        try:
-            __import__(module)
-        except ImportError:
-            missing_modules.append(module)
-            if pip_name not in ('re', 'time', 'sqlite3', 'webbrowser', 'datetime'):
-                pip_installable.append(pip_name)
-
-    if not missing_modules:
-        return True
-
-    print("The following modules are missing:")
-    for mod in missing_modules:
-        print(f"- {mod}")
-
-    if not pip_installable:
-        print("All missing modules are built-ins that should come with Python.")
-        return False
-
-    try:
-        from PySide6.QtWidgets import QApplication, QMessageBox
-        _ = QApplication(sys.argv)
-        response = QMessageBox.question(
-            None, "Missing Modules",
-            f"Missing modules: {', '.join(missing_modules)}\n\nInstall with pip?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if response != QMessageBox.Yes:
-            return False
-    except ImportError:
-        response = input(f"\nInstall missing modules ({', '.join(set(pip_installable))}) with pip? (y/n): ").strip().lower()
-        if response != 'y':
-            return False
-
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install"] + list(set(pip_installable)))
-        for module in missing_modules:
-            __import__(module)
-        return True
-    except Exception as e:
-        print(f"Failed to install or import modules: {e}")
-        return False
-
-
-if not check_and_install_modules(required_modules):
-    sys.exit("Missing required modules. Please install and retry.")
-
-# -----------------------
-# Actual Imports
-# -----------------------
-
-# Built-in / stdlib
 import math
 import os
+import platform
 import re
 import sqlite3
+import sys
+import time
 import webbrowser
-from collections.abc import KeysView
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from functools import wraps
+from dataclasses import dataclass
+from typing import (
+    TYPE_CHECKING, Any, Callable, Dict, List, Optional,
+    Tuple, Type, TypeVar, Union, cast,
+)
 
-# Third-party
-import discord
+# -----------------------
+# Third-Party
+# -----------------------
+
 import requests
 from bs4 import BeautifulSoup
 
-# PySide6 Core
+
+# -----------------------
+# OS-Specific Environment Setup
+# -----------------------
+
+def configure_qtwebengine_environment() -> None:
+    """
+    Apply OS-specific environment variables required for QtWebEngine stability.
+
+    These must be set BEFORE any QtWebEngine components are initialized.
+    """
+    platform_name = sys.platform
+
+    if platform_name.startswith("linux"):
+        # Linux / Proton / containerized environments
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault(
+            "QTWEBENGINE_CHROMIUM_FLAGS",
+            "--disable-software-rasterizer",
+        )
+
+    elif platform_name == "darwin":
+        # macOS (notably VMware / Parallels GPU instability)
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+        os.environ.setdefault(
+            "QTWEBENGINE_CHROMIUM_FLAGS",
+            "--disable-gpu",
+        )
+        os.environ.setdefault(
+            "QTWEBENGINE_DICTIONARIES_PATH",
+            "/tmp",
+        )
+
+
+# Apply environment configuration immediately, before any Qt imports.
+configure_qtwebengine_environment()
+
+
+# -----------------------
+# PySide6
+# -----------------------
+
+import PySide6.QtGui  # kept for dynamic access
+from PySide6 import QtCore
 from PySide6.QtCore import (
     QByteArray, QDateTime, QEasingCurve, QEvent, QMimeData,
-    QPoint, QPropertyAnimation, QRect, QSize, Qt, QTimer, QUrl,
-    Slot as pyqtSlot
+    QPropertyAnimation, QRect, QSize, Qt, QTimer, QUrl,
+    Slot as pyqtSlot, QObject, Signal, QThread,
 )
-
-# PySide6 GUI
-import PySide6.QtGui  # Keep for dynamic access
 from PySide6.QtGui import QIcon
-
-# PySide6 Widgets
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QCompleter,
     QDialog, QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSplashScreen,
     QStyle, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget, QInputDialog, QSizePolicy
+    QVBoxLayout, QWidget, QInputDialog, QSizePolicy, QStackedWidget,
 )
-
-# PySide6 Web
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
-
-# PySide6 Network
 from PySide6.QtNetwork import QNetworkCookie
 
-# Typing
-from typing import TYPE_CHECKING, List, Tuple, Type, TypeVar, cast
+
+# -----------------------
+# Type Checking
+# -----------------------
+
+if TYPE_CHECKING:
+    class Scraper:
+        def scrape_guilds_and_shops(self) -> None: ...
+        def close_connection(self) -> None: ...
+
+    class MainWindowType(QWidget):
+        current_css_profile: str
+        selected_character: dict | None
+        destination: tuple[int, int] | None
+        website_frame: QWebEngineView
+        scraper: Scraper
+
+        columns: dict[str, int]
+        rows: dict[str, int]
+
+        def apply_custom_css(self, css: str) -> None: ...
+        def update_minimap(self) -> None: ...

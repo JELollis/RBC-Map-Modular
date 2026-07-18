@@ -1,365 +1,414 @@
 from imports import *
 from constants import *
 
+
 class CSSCustomizationDialog(QDialog):
-    def __init__(self, parent: QWidget = None, current_profile: str = None, color_mappings: dict | None = None) -> None:
+    """
+    Two-mode CSS customization dialog.
+
+    - Simple Mode: GUI controls for non-CSS users
+    - Advanced Mode: Full raw CSS editor
+
+    CSS text is the single source of truth.
+    Database writes occur ONLY on Apply.
+    """
+
+    SIMPLE = 0
+    ADVANCED = 1
+
+    def __init__(
+            self,
+            parent: QWidget | None = None,
+            current_profile: str | None = None,
+            color_mappings: dict | None = None,
+    ) -> None:
         super().__init__(parent)
+
         self.parent = parent
         self.color_mappings = color_mappings or {}
-        self.current_profile = current_profile or self.get_current_profile()
+        self.current_profile = current_profile or self._load_current_profile()
 
         self.setWindowTitle("CSS Customization")
         self.setWindowIcon(APP_ICON)
-        self.resize(600, 400)
-        self.tabs = {}
-        self.setup_ui()
-        self.load_existing_customizations()
+        self.resize(900, 600)
+
+        # ---- CSS state ----
+        self._original_css = self._load_css_from_db(self.current_profile)
+        self._working_css = self._original_css
+
+        self._build_ui()
 
         if self.color_mappings:
             apply_theme_to_widget(self, self.color_mappings)
 
-        logging.debug(f"CSSCustomizationDialog initialized with profile '{self.current_profile}'")
+        logging.debug(
+            "CSSCustomizationDialog initialized (profile=%s)",
+            self.current_profile,
+        )
 
-    def get_current_profile(self) -> str:
-        """Retrieve the current CSS profile from settings."""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT setting_value FROM settings WHERE setting_name = 'css_profile'")
-                result = cursor.fetchone()
-                return result[0] if result else "Default"
-        except sqlite3.Error as e:
-            logging.error(f"Failed to retrieve current profile: {e}")
-            return "Default"
+    # =====================================================
+    # UI
+    # =====================================================
 
-    def update_current_profile(self, profile: str) -> None:
-        """Update the css_profile setting in the database."""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT OR REPLACE INTO settings (setting_name, setting_value) VALUES (?, ?)",
-                    ("css_profile", profile)
-                )
-                conn.commit()
-            self.current_profile = profile
-            logging.debug(f"Updated css_profile to: {profile}")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to update css_profile: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to update profile: {e}")
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
 
-    def setup_ui(self) -> None:
-        """Set up the UI for CSS customization."""
-        main_layout = QVBoxLayout(self)
+        # ---- Profile + Mode Bar ----
+        top_bar = QHBoxLayout()
 
-        # Profile selection
-        profile_layout = QHBoxLayout()
-        profile_layout.addWidget(QLabel("Profile:"))
+        top_bar.addWidget(QLabel("Profile:"))
+
         self.profile_dropdown = QComboBox()
-        self.load_profiles()
+        self._load_profiles()
         self.profile_dropdown.setCurrentText(self.current_profile)
-        self.profile_dropdown.currentTextChanged.connect(self.on_profile_change)
-        profile_layout.addWidget(self.profile_dropdown)
+        self.profile_dropdown.currentTextChanged.connect(self._on_profile_changed)
+        top_bar.addWidget(self.profile_dropdown)
 
-        new_profile_btn = QPushButton("New Profile")
-        new_profile_btn.clicked.connect(self.create_new_profile)
-        profile_layout.addWidget(new_profile_btn)
+        new_btn = QPushButton("New")
+        new_btn.clicked.connect(self._create_profile)
+        top_bar.addWidget(new_btn)
 
-        delete_profile_btn = QPushButton("Delete Profile")
-        delete_profile_btn.clicked.connect(self.delete_profile)
-        profile_layout.addWidget(delete_profile_btn)
+        delete_btn = QPushButton("Delete")
+        delete_btn.clicked.connect(self._delete_profile)
+        top_bar.addWidget(delete_btn)
 
-        main_layout.addLayout(profile_layout)
+        top_bar.addStretch()
 
-        # Tabs for CSS categories
-        self.tab_widget = QTabWidget()
-        self.add_tab("Background", ["BODY"])
-        self.add_tab("Text", ["H1", "P", "A", "TD", "DIV"])
-        self.add_tab("City Elements", ["TD.cityblock", "TD.intersect", "TD.street", "TD.city"])
-        self.add_tab("Special Elements", [
-            "SPAN.intersect", "SPAN.transit", "SPAN.pub", "SPAN.bank", "SPAN.shop",
-            "SPAN.grave", "SPAN.pk", "SPAN.lair", "SPAN.alchemy"
-        ])
-        main_layout.addWidget(self.tab_widget)
+        self.mode_selector = QComboBox()
+        self.mode_selector.addItems(["Simple", "Advanced"])
+        self.mode_selector.currentIndexChanged.connect(self._switch_mode)
+        top_bar.addWidget(QLabel("Mode:"))
+        top_bar.addWidget(self.mode_selector)
 
-        # Buttons
-        button_layout = QHBoxLayout()
-        upload_btn = QPushButton("Upload CSS File")
-        upload_btn.clicked.connect(self.upload_css_file)
-        button_layout.addWidget(upload_btn)
+        layout.addLayout(top_bar)
 
-        clear_btn = QPushButton("Clear All")
-        clear_btn.clicked.connect(self.clear_all_customizations)
-        button_layout.addWidget(clear_btn)
+        # ---- Editor Stack ----
+        self.editor_stack = QStackedWidget()
+
+        self.simple_editor = QWidget()
+        self.advanced_editor = QTextEdit()
+
+        self._build_simple_editor()
+        self._build_advanced_editor()
+
+        self.editor_stack.addWidget(self.simple_editor)
+        self.editor_stack.addWidget(self.advanced_editor)
+
+        layout.addWidget(self.editor_stack)
+
+        # ---- Buttons ----
+        button_bar = QHBoxLayout()
+
+        load_btn = QPushButton("Load .css")
+        load_btn.clicked.connect(self._load_css_file)
+        button_bar.addWidget(load_btn)
+
+        save_btn = QPushButton("Save .css")
+        save_btn.clicked.connect(self._save_css_file)
+        button_bar.addWidget(save_btn)
+
+        button_bar.addStretch()
 
         apply_btn = QPushButton("Apply")
-        apply_btn.clicked.connect(self.save_and_apply_changes)
-        button_layout.addWidget(apply_btn)
+        apply_btn.clicked.connect(self._apply_changes)
+        button_bar.addWidget(apply_btn)
 
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_btn)
+        button_bar.addWidget(cancel_btn)
 
-        main_layout.addLayout(button_layout)
-        self.setLayout(main_layout)
+        layout.addLayout(button_bar)
 
-        # Ensure preview updates even if currentTextChanged isn't triggered
-        self.on_profile_change(self.current_profile)
+        # Start in Simple Mode
+        self._switch_mode(self.SIMPLE)
 
-    def on_profile_change(self, profile: str) -> None:
-        """Handle profile change: update DB, load styles, apply CSS."""
-        if profile != self.current_profile:
-            self.update_current_profile(profile)
+    # =====================================================
+    # Simple Mode (GUI)
+    # =====================================================
 
-        self.current_profile = profile
-        self.load_existing_customizations()
-        css = self.generate_custom_css()
+    def _build_simple_editor(self) -> None:
+        layout = QFormLayout(self.simple_editor)
 
-        if css and self.parent:
-            parent = cast("MainWindowType", self.parent)
-            parent.apply_custom_css(css)
-            parent.website_frame.reload()
+        bg_btn = QPushButton("Change Background Color")
+        bg_btn.clicked.connect(
+            lambda: self._pick_color("BODY", "background-color")
+        )
 
-        logging.info(f"Switched to profile: {profile} and applied CSS")
+        text_btn = QPushButton("Change Text Color")
+        text_btn.clicked.connect(
+            lambda: self._pick_color("BODY", "color")
+        )
 
-    def load_profiles(self) -> None:
-        """Load available CSS profiles from the database."""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT profile_name FROM css_profiles")
-                profiles = [row[0] for row in cursor.fetchall()]
-            self.profile_dropdown.clear()
-            self.profile_dropdown.addItems(profiles)
-            logging.debug(f"Loaded {len(profiles)} profiles")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to load profiles: {e}")
-            QMessageBox.critical(self, "Error", "Failed to load profiles")
+        link_btn = QPushButton("Change Link Color")
+        link_btn.clicked.connect(
+            lambda: self._pick_color("A", "color")
+        )
 
-    def create_new_profile(self) -> None:
-        """Create a new CSS profile."""
-        profile_name, ok = QInputDialog.getText(self, "New Profile", "Enter profile name:")
-        if ok and profile_name:
-            try:
-                with sqlite3.connect(DB_PATH) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT OR IGNORE INTO css_profiles (profile_name) VALUES (?)", (profile_name,))
-                    conn.commit()
-                self.load_profiles()
-                self.profile_dropdown.setCurrentText(profile_name)
-                self.on_profile_change(profile_name)
-                logging.info(f"Created new profile: {profile_name}")
-            except sqlite3.Error as e:
-                logging.error(f"Failed to create profile: {e}")
-                QMessageBox.critical(self, "Error", "Failed to create profile")
+        layout.addRow("Page Background:", bg_btn)
+        layout.addRow("Text Color:", text_btn)
+        layout.addRow("Link Color:", link_btn)
 
-    def delete_profile(self) -> None:
-        """Delete the selected CSS profile."""
-        profile = self.profile_dropdown.currentText()
-        if profile == "Default":
-            QMessageBox.warning(self, "Warning", "Cannot delete the Default profile")
+        note = QLabel(
+            "Simple Mode modifies common visual elements safely.\n"
+            "Switch to Advanced Mode for full control."
+        )
+        note.setWordWrap(True)
+        layout.addRow(note)
+
+    def _pick_color(self, selector: str, prop: str) -> None:
+        color = QColorDialog.getColor(self)
+        if not color.isValid():
             return
-        # noinspection PyUnresolvedReferences
-        reply = QMessageBox.question(self, "Confirm Delete", f"Delete profile '{profile}'?", QMessageBox.Yes | QMessageBox.No)
-        # noinspection PyUnresolvedReferences
-        if reply == QMessageBox.Yes:
-            try:
-                with sqlite3.connect(DB_PATH) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("DELETE FROM css_profiles WHERE profile_name = ?", (profile,))
-                    conn.commit()
-                self.load_profiles()
-                self.profile_dropdown.setCurrentText("Default")
-                self.on_profile_change("Default")
-                logging.info(f"Deleted profile: {profile}")
-            except sqlite3.Error as e:
-                logging.error(f"Failed to delete profile: {e}")
-                QMessageBox.critical(self, "Error", "Failed to delete profile")
 
-    def add_tab(self, tab_title: str, elements: list[str]) -> None:
-        """Add a tab for a category of CSS elements."""
-        tab = QWidget()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        container = QWidget()
-        grid = QGridLayout(container)
+        self._set_css_property(selector, prop, color.name())
+        self._sync_advanced_editor()
 
-        grid.addWidget(QLabel("Element"), 0, 0)
-        grid.addWidget(QLabel("Preview"), 0, 1)
-        grid.addWidget(QLabel("Color"), 0, 2)
-        grid.addWidget(QLabel("Image"), 0, 3)
-        grid.addWidget(QLabel("Shadow"), 0, 4)
-        grid.addWidget(QLabel("Reset"), 0, 5)
+    # =====================================================
+    # Advanced Mode (Raw CSS)
+    # =====================================================
 
-        for i, element in enumerate(elements, 1):
-            label = QLabel(element)
-            preview = QLabel("Preview")
-            preview.setFixedSize(100, 30)
-            preview.setStyleSheet("border: 1px solid black;")
-            color_btn = QPushButton("Pick Color")
-            color_btn.clicked.connect(lambda _, e=element, p=preview: self.pick_color(e, p))
-            image_btn = QPushButton("Pick Image")
-            image_btn.clicked.connect(lambda _, e=element, p=preview: self.pick_image(e, p))
-            shadow_btn = QPushButton("Add Shadow")
-            shadow_btn.clicked.connect(lambda _, e=element: self.add_shadow(e))
-            reset_btn = QPushButton("Reset")
-            reset_btn.clicked.connect(lambda _, e=element, p=preview: self.reset_css_item(e, p))
-            grid.addWidget(label, i, 0)
-            grid.addWidget(preview, i, 1)
-            grid.addWidget(color_btn, i, 2)
-            grid.addWidget(image_btn, i, 3)
-            grid.addWidget(shadow_btn, i, 4)
-            grid.addWidget(reset_btn, i, 5)
+    def _build_advanced_editor(self) -> None:
+        self.advanced_editor.setFontFamily("Courier")
+        self.advanced_editor.setFontPointSize(10)
+        self.advanced_editor.setPlainText(self._working_css)
+        self.advanced_editor.textChanged.connect(self._on_advanced_changed)
 
-        scroll.setWidget(container)
-        tab.setLayout(QVBoxLayout())
-        tab.layout().addWidget(scroll)
-        self.tab_widget.addTab(tab, tab_title)
-        self.tabs[tab_title] = tab
-        tab.grid = grid
+    def _on_advanced_changed(self) -> None:
+        self._working_css = self.advanced_editor.toPlainText()
 
-    def pick_color(self, css_item: str, preview: QLabel) -> None:
-        """Open a color picker and apply the selected color."""
-        color = QColorDialog.getColor()
-        if color.isValid():
-            style = f"background-color: {color.name()};"
-            preview.setStyleSheet(style)
-            self.save_css_item(css_item, style)
-            logging.debug(f"Set color for '{css_item}': {color.name()}")
+    def _sync_advanced_editor(self) -> None:
+        self.advanced_editor.blockSignals(True)
+        self.advanced_editor.setPlainText(self._working_css)
+        self.advanced_editor.blockSignals(False)
 
-    def pick_image(self, css_item: str, preview: QLabel) -> None:
-        """Open a file dialog to select an image and apply it as a background."""
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select Image", "", "Images (*.png *.jpg *.jpeg)")
-        if file_path:
-            style = f"background-image: url({file_path}); background-size: cover;"
-            preview.setStyleSheet(style)
-            self.save_css_item(css_item, style)
-            logging.debug(f"Set image for '{css_item}': {file_path}")
+    # =====================================================
+    # Mode Switching
+    # =====================================================
 
-    def add_shadow(self, css_item: str) -> None:
-        """Add a default shadow effect to the element."""
-        style = "box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);"
-        self.save_css_item(css_item, style)
-        self.load_existing_customizations()
-        logging.debug(f"Added shadow to '{css_item}'")
+    def _switch_mode(self, index: int) -> None:
+        self.editor_stack.setCurrentIndex(index)
+        if index == self.ADVANCED:
+            self._sync_advanced_editor()
 
-    def save_css_item(self, css_item: str, value: str) -> None:
-        """Save a CSS customization to the database under the current profile."""
-        if not value.strip():
-            return
+    # =====================================================
+    # CSS Manipulation (Core Helper)
+    # =====================================================
+
+    def _set_css_property(
+            self,
+            selector: str,
+            property_name: str,
+            value: str,
+    ) -> None:
+        """
+        Insert or update a single CSS property in a selector block
+        without disturbing other rules.
+        """
+        css = self._working_css
+
+        block_re = re.compile(
+            rf"({re.escape(selector)}\s*\{{)([^}}]*)(\}})",
+            re.IGNORECASE | re.MULTILINE,
+            )
+
+        match = block_re.search(css)
+
+        if match:
+            before, body, after = match.groups()
+
+            prop_re = re.compile(
+                rf"{re.escape(property_name)}\s*:\s*[^;]+;",
+                re.IGNORECASE,
+            )
+
+            if prop_re.search(body):
+                body = prop_re.sub(
+                    f"{property_name}: {value};",
+                    body,
+                )
+            else:
+                body = body.rstrip() + f"\n  {property_name}: {value};"
+
+            css = css[: match.start()] + before + body + after + css[match.end():]
+
+        else:
+            css += f"\n{selector} {{\n  {property_name}: {value};\n}}\n"
+
+        self._working_css = css
+
+    # =====================================================
+    # Apply / Cancel
+    # =====================================================
+
+    def _apply_changes(self) -> None:
+        css = self._working_css.strip()
+
         try:
             with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT OR REPLACE INTO custom_css (profile_name, element, value) VALUES (?, ?, ?)",
-                    (self.current_profile, css_item, value)
+                cur = conn.cursor()
+
+                # Clear existing rules
+                cur.execute(
+                    "DELETE FROM custom_css WHERE profile_name = ?",
+                    (self.current_profile,),
                 )
+
+                rules = re.findall(
+                    r"([^{]+){([^}]+)}",
+                    css,
+                    re.DOTALL,
+                )
+
+                cur.executemany(
+                    """
+                    INSERT INTO custom_css (profile_name, element, value)
+                    VALUES (?, ?, ?)
+                    """,
+                    [
+                        (self.current_profile, sel.strip(), body.strip())
+                        for sel, body in rules
+                    ],
+                )
+
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO settings (setting_name, setting_value)
+                    VALUES ('css_profile', ?)
+                    """,
+                    (self.current_profile,),
+                )
+
                 conn.commit()
-        except sqlite3.Error as e:
-            logging.error(f"Failed to save CSS for '{css_item}': {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save CSS: {e}")
 
-    def load_existing_customizations(self) -> None:
-        """Load and apply existing CSS customizations for the current profile."""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT element, value FROM custom_css WHERE profile_name = ?",
-                    (self.current_profile,)
-                )
-                customizations = dict(cursor.fetchall())
-
-            for tab in self.tabs.values():
-                grid = tab.grid
-                for row in range(1, grid.rowCount()):
-                    label = grid.itemAtPosition(row, 0).widget()
-                    preview = grid.itemAtPosition(row, 1).widget()
-                    preview.setStyleSheet(customizations.get(label.text(), ""))
-        except sqlite3.Error as e:
-            logging.error(f"Failed to load CSS customizations: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to load customizations: {e}")
-
-    def save_and_apply_changes(self) -> None:
-        selected_profile = self.profile_dropdown.currentText()
-        self.update_current_profile(selected_profile)
-        self.current_profile = selected_profile
-        css = self.generate_custom_css()
-        if css and self.parent:
-            parent = cast("MainWindowType", self.parent)
-            parent.current_css_profile = self.current_profile
-            parent.apply_custom_css(css)
-            parent.website_frame.reload()
-        self.accept()
-        logging.info("CSS changes saved and applied")
-
-    def generate_custom_css(self) -> str:
-        """Generate CSS string from database customizations for the current profile."""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT element, value FROM custom_css WHERE profile_name = ?",
-                    (self.current_profile,)
-                )
-                return "\n".join(f"{elem} {{ {val} }}" for elem, val in cursor.fetchall())
-        except sqlite3.Error as e:
-            logging.error(f"Failed to generate CSS: {e}")
-            return ""
-
-    def upload_css_file(self) -> None:
-        """Upload and apply a CSS file to the current profile."""
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select CSS", "", "CSS Files (*.css)")
-        if file_path:
-            try:
-                with open(file_path, "r") as f, sqlite3.connect(DB_PATH) as conn:
-                    css = f.read()
-                    rules = re.findall(r'([^{]+){([^}]+)}', css, re.DOTALL)
-                    cursor = conn.cursor()
-                    cursor.executemany(
-                        "INSERT OR REPLACE INTO custom_css (profile_name, element, value) VALUES (?, ?, ?)",
-                        [(self.current_profile, sel.strip(), prop.strip()) for sel, prop in rules]
-                    )
-                    conn.commit()
-                self.load_existing_customizations()
-                if self.parent:
-                    parent = cast("MainWindowType", self.parent)
-                    parent.apply_custom_css(css)
-                    parent.website_frame.reload()
-                logging.info(f"Uploaded CSS file: {file_path} to profile '{self.current_profile}'")
-            except (IOError, sqlite3.Error) as e:
-                logging.error(f"Failed to upload CSS file: {e}")
-                QMessageBox.critical(self, "Error", f"Upload failed: {e}")
-
-    def reset_css_item(self, css_item: str, preview: QLabel) -> None:
-        """Reset a specific CSS item to default for the current profile."""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM custom_css WHERE profile_name = ? AND element = ?",
-                    (self.current_profile, css_item)
-                )
-                conn.commit()
-            preview.setStyleSheet("")
-            logging.debug(f"Reset CSS for '{css_item}' in profile '{self.current_profile}'")
-        except sqlite3.Error as e:
-            logging.error(f"Failed to reset CSS for '{css_item}': {e}")
-            QMessageBox.critical(self, "Error", f"Failed to reset CSS: {e}")
-
-    def clear_all_customizations(self) -> None:
-        """Clear all CSS customizations for the current profile."""
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM custom_css WHERE profile_name = ?", (self.current_profile,))
-                conn.commit()
-            self.load_existing_customizations()
             if self.parent:
                 parent = cast("MainWindowType", self.parent)
-                parent.apply_custom_css("")
+                parent.current_css_profile = self.current_profile
+                parent.apply_custom_css(css)
                 parent.website_frame.reload()
-            logging.info(f"Cleared all CSS customizations for profile '{self.current_profile}'")
+
+            self.accept()
+            logging.info("CSS applied successfully")
+
         except sqlite3.Error as e:
-            logging.error(f"Failed to clear CSS customizations: {e}")
-            QMessageBox.critical(self, "Error", "Failed to clear customizations")
+            QMessageBox.critical(self, "Error", str(e))
+
+    # =====================================================
+    # File I/O
+    # =====================================================
+
+    def _load_css_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load CSS", "", "CSS Files (*.css)"
+        )
+        if path:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self._working_css = f.read()
+                    self._sync_advanced_editor()
+            except IOError as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _save_css_file(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save CSS", "", "CSS Files (*.css)"
+        )
+        if path:
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(self._working_css)
+            except IOError as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    # =====================================================
+    # Profile Handling
+    # =====================================================
+
+    def _load_current_profile(self) -> str:
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'css_profile'"
+                )
+                row = cur.fetchone()
+                return row[0] if row else "Default"
+        except sqlite3.Error:
+            return "Default"
+
+    def _load_profiles(self) -> None:
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT profile_name FROM css_profiles")
+                profiles = [r[0] for r in cur.fetchall()]
+            self.profile_dropdown.clear()
+            self.profile_dropdown.addItems(profiles)
+        except sqlite3.Error as e:
+            logging.error("Failed to load CSS profiles: %s", e)
+
+    def _create_profile(self) -> None:
+        name, ok = QInputDialog.getText(self, "New Profile", "Profile name:")
+        if ok and name:
+            try:
+                with sqlite3.connect(DB_PATH) as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        "INSERT OR IGNORE INTO css_profiles (profile_name) VALUES (?)",
+                        (name,),
+                    )
+                    conn.commit()
+                self._load_profiles()
+                self.profile_dropdown.setCurrentText(name)
+            except sqlite3.Error as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+    def _delete_profile(self) -> None:
+        profile = self.profile_dropdown.currentText()
+        if profile == "Default":
+            QMessageBox.warning(self, "Warning", "Default profile cannot be deleted.")
+            return
+
+        if QMessageBox.question(
+                self,
+                "Confirm",
+                f"Delete profile '{profile}'?",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "DELETE FROM css_profiles WHERE profile_name = ?",
+                    (profile,),
+                )
+                cur.execute(
+                    "DELETE FROM custom_css WHERE profile_name = ?",
+                    (profile,),
+                )
+                conn.commit()
+            self._load_profiles()
+            self.profile_dropdown.setCurrentText("Default")
+        except sqlite3.Error as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def _on_profile_changed(self, profile: str) -> None:
+        self.current_profile = profile
+        self._original_css = self._load_css_from_db(profile)
+        self._working_css = self._original_css
+        self._sync_advanced_editor()
+
+    def _load_css_from_db(self, profile: str) -> str:
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT element, value FROM custom_css WHERE profile_name = ?",
+                    (profile,),
+                )
+                return "\n".join(
+                    f"{sel} {{ {val} }}"
+                    for sel, val in cur.fetchall()
+                )
+        except sqlite3.Error:
+            return ""
