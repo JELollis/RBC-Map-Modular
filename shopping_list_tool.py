@@ -111,7 +111,7 @@ class ShoppingListTool(QDialog):
         self.add_item_button.clicked.connect(self.add_item)
         self.remove_item_button.clicked.connect(self.remove_item)
         self.shop_combobox.currentIndexChanged.connect(self.load_items)
-        self.charisma_combobox.currentIndexChanged.connect(self._refresh_prices)
+        self.charisma_combobox.currentIndexChanged.connect(self._on_charisma_changed)
 
         self.update_total()
 
@@ -220,6 +220,13 @@ class ShoppingListTool(QDialog):
             del self.shopping_items[name]
 
         self._refresh_shopping_list()
+
+    def _on_charisma_changed(self) -> None:
+        # Reload the available-items list so its displayed prices reflect the
+        # new charisma discount (add_item parses the displayed price), then
+        # re-price anything already in the cart.
+        self.load_items()
+        self._refresh_prices()
 
     def _refresh_prices(self) -> None:
         if not self.sqlite_cursor:

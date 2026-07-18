@@ -156,7 +156,7 @@ class CSSCustomizationDialog(QDialog):
         layout.addRow(note)
 
     def _pick_color(self, selector: str, prop: str) -> None:
-        color = QColorDialog.getColor(self)
+        color = QColorDialog.getColor(PySide6.QtGui.QColor('white'), self)
         if not color.isValid():
             return
 
