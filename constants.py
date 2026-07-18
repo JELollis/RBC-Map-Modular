@@ -22,6 +22,25 @@ REQUIRED_DIRECTORIES = [
 VERSION_NUMBER = "0.13.3.0"
 
 # -----------------------
+# Location update API
+# -----------------------
+
+# Default timeout (seconds) for outbound HTTP calls in the update flow.
+HTTP_REQUEST_TIMEOUT = 10
+
+# Preferred path is the tokenless /refresh endpoint; the token URLs below are
+# retained only for the legacy fallback used against older API servers.
+UPDATE_REFRESH_URL = "https://lollis-home.ddns.net/api/refresh"
+UPDATE_TOKEN_URL = "https://lollis-home.ddns.net/api/request-token.py"
+UPDATE_TRIGGER_URL = "https://lollis-home.ddns.net/api/trigger-update.py"
+UPDATE_LOCATIONS_URL = "https://lollis-home.ddns.net/api/locations.json"
+
+# After triggering a scrape we poll locations.json until its "last_updated"
+# field advances (i.e. the bot finished), instead of a fixed blind sleep.
+REFRESH_POLL_MAX_SECONDS = 20.0
+REFRESH_POLL_INTERVAL_SECONDS = 1.5
+
+# -----------------------
 # Logging Configuration
 # -----------------------
 
