@@ -41,6 +41,21 @@ REFRESH_POLL_MAX_SECONDS = 20.0
 REFRESH_POLL_INTERVAL_SECONDS = 1.5
 
 # -----------------------
+# Crowdsourced location reporting (report-back)
+# -----------------------
+
+# Endpoint that receives locations this client discovers on the game page, so
+# the scraper bot can keep shared data current between AVITD reveal cycles.
+# Gated by the user's opt-in preference; POST is fire-and-forget and any
+# failure is logged, never fatal. Inert until the server exposes the route.
+# See docs/crowdsourced-location-reporting.md.
+REPORT_LOCATION_URL = "https://lollis-home.ddns.net/api/report-location"
+
+# Timeout (seconds) for the report POST. Kept short so a slow/down endpoint
+# never delays page processing.
+REPORT_TIMEOUT = 5
+
+# -----------------------
 # Logging Configuration
 # -----------------------
 

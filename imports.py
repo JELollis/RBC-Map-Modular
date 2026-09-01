@@ -19,7 +19,9 @@ import platform
 import re
 import sqlite3
 import sys
+import threading
 import time
+import uuid
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

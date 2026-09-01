@@ -49,20 +49,36 @@ def _timestamp_advanced(latest_ts, baseline_ts) -> bool:
     return latest_ts > baseline_ts
 
 
-def _fetch_location_update_v2(timeout: int, log_prefix: str, poll_max_seconds: float) -> dict:
+def _fetch_location_update_v2(
+    timeout: int,
+    log_prefix: str,
+    poll_max_seconds: float,
+    known_timestamp: str | None = None,
+) -> dict | None:
     """Tokenless refresh flow: trigger via /refresh, then poll for fresh data.
 
     Asks the API to refresh (cooldown-gated, no token round-trip). If the API
     reports it actually triggered a scrape, poll locations.json until its
     ``last_updated`` field advances past the pre-trigger value, so we return
-    genuinely fresh data instead of guessing with a fixed sleep. If the API
-    reports it is cooling down, the data is already fresh and we fetch it
-    immediately. Any other status is treated as a failure rather than silently
-    accepting whatever is on disk (which would rewrite last_scraped and make
-    stale data look current).
+    genuinely fresh data instead of guessing with a fixed sleep.
+
+    If the API reports it is cooling down, the bot scraped recently but not
+    necessarily since our last write. We compare the server's ``last_updated``
+    against ``known_timestamp`` (what we last stored locally): only pull the
+    JSON down when the server copy is strictly newer, so a cooldown response
+    for data we already hold does not rewrite the DB (and its last_scraped)
+    with unchanged rows. When the server is not newer we return ``None`` to
+    tell the caller there is nothing to update.
+
+    Any other status is treated as a failure rather than silently accepting
+    whatever is on disk (which would rewrite last_scraped and make stale data
+    look current).
 
     ``poll_max_seconds`` bounds how long we wait for a triggered scrape to land;
     callers on the UI thread pass a small budget to stay responsive.
+
+    Returns the parsed locations JSON, or ``None`` when a cooldown response
+    shows the local copy is already current.
     """
     logging.info("%sRequesting map refresh...", log_prefix)
     resp = requests.post(UPDATE_REFRESH_URL, timeout=timeout)
@@ -73,9 +89,21 @@ def _fetch_location_update_v2(timeout: int, log_prefix: str, poll_max_seconds: f
     status = info.get("status")
 
     if status == "cooldown":
-        # Bot scraped within the cooldown window; data is already current.
-        logging.info("%sData already fresh (cooldown); fetching current locations", log_prefix)
-        return _fetch_locations_json(timeout)
+        # Bot scraped within the cooldown window. Only pull it down if the
+        # server's copy is genuinely newer than what we already stored;
+        # otherwise the local DB is already current and a re-write would just
+        # churn last_scraped with identical data.
+        if _timestamp_advanced(baseline, known_timestamp):
+            logging.info(
+                "%sCooldown, but server data is newer (%s > %s); fetching current locations",
+                log_prefix, baseline, known_timestamp,
+            )
+            return _fetch_locations_json(timeout)
+        logging.info(
+            "%sCooldown and local data already current (server=%s, local=%s); skipping fetch",
+            log_prefix, baseline, known_timestamp,
+        )
+        return None
 
     if status != "triggered":
         # Unknown / error status: do not accept it as fresh data.
@@ -123,7 +151,8 @@ def fetch_location_update(
     timeout: int = HTTP_REQUEST_TIMEOUT,
     log_prefix: str = "",
     poll_max_seconds: float = REFRESH_POLL_MAX_SECONDS,
-) -> dict:
+    known_timestamp: str | None = None,
+) -> dict | None:
     """Refresh locations.json from the bot and return it parsed.
 
     Prefers the tokenless /refresh endpoint (:func:`_fetch_location_update_v2`),
@@ -140,9 +169,15 @@ def fetch_location_update(
             Callers on the UI thread (manual "Update Data") pass a small value
             so the window does not freeze on a slow scrape; the startup worker
             runs off-thread and can use the full default budget.
+        known_timestamp: the server ``last_updated`` value already stored
+            locally. On a /refresh "cooldown" response the JSON is pulled down
+            only when the server's timestamp is strictly newer than this, so
+            unchanged data does not needlessly rewrite the DB.
 
     Returns:
-        The parsed locations JSON as a dict.
+        The parsed locations JSON as a dict, or ``None`` when a cooldown
+        response shows the local copy is already current (nothing to update).
+        The legacy fallback path always returns a dict.
 
     Raises:
         requests.RequestException: on any network/HTTP error.
@@ -150,7 +185,7 @@ def fetch_location_update(
             server returns an unrecognized /refresh status.
     """
     try:
-        return _fetch_location_update_v2(timeout, log_prefix, poll_max_seconds)
+        return _fetch_location_update_v2(timeout, log_prefix, poll_max_seconds, known_timestamp)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else None
         if status not in (404, 405):
@@ -180,7 +215,13 @@ class StartupUpdateWorker(QObject):
                 sleep_seconds=10,
                 timeout=self.REQUEST_TIMEOUT,
                 log_prefix="[Startup] ",
+                known_timestamp=self.app.get_locations_last_updated(),
             )
+
+            if data is None:
+                logging.info("[Startup] Local data already current; no update needed")
+                self.finished.emit(True, "Data already up to date")
+                return
 
             self.app.update_database_with_json(data)
 
@@ -299,6 +340,11 @@ class RBCCommunityMap(QMainWindow):
         # Self-learning building cache
         self._seen_buildings: set[tuple[str, str, str]] = set()
 
+        # Crowdsourced reporting prefs (populated by _init_reporting_prefs()).
+        self.location_reporting_enabled = True
+        self.client_id = None
+        self._reporting_pref_was_unset = False
+
         # -----------------------
         # Initialization Pipeline
         # -----------------------
@@ -308,6 +354,7 @@ class RBCCommunityMap(QMainWindow):
         self._init_web_profile()
         self._init_ui_state()
         self._init_characters()
+        self._init_reporting_prefs()
         self._init_ui_components()
         self._finalize_setup()
 
@@ -419,6 +466,18 @@ class RBCCommunityMap(QMainWindow):
         if not self.characters:
             self.firstrun_character_creation()
 
+    @splash_message(lambda self: self.splash, "Loading preferences")
+    def _init_reporting_prefs(self) -> None:
+        """Load the crowdsourced-reporting opt-in and anonymous client id.
+
+        Runs before the UI is built so the Settings-menu toggle can reflect the
+        stored choice. If the preference has never been set (true first run, or
+        upgrade from a version without it), ``_reporting_pref_was_unset`` is
+        flagged so :meth:`_finalize_setup` can ask the user once.
+        """
+        self.load_location_reporting_setting()
+        self.client_id = self._get_or_create_client_id()
+
     @splash_message(lambda self: self.splash, "Building interface")
     def _init_ui_components(self) -> None:
         self.setup_ui_components()
@@ -427,6 +486,11 @@ class RBCCommunityMap(QMainWindow):
     @splash_message(lambda self: self.splash, "Finalizing startup")
     def _finalize_setup(self) -> None:
         self.show()
+
+        # First-run (or first upgrade) opt-in for sharing discovered locations.
+        # Deferred until the window is shown so the dialog has a visible parent.
+        if self._reporting_pref_was_unset:
+            QTimer.singleShot(0, self.prompt_first_run_reporting_choice)
 
         if self.selected_character and self.destination:
             self.update_minimap()
@@ -1304,6 +1368,14 @@ class RBCCommunityMap(QMainWindow):
         css_customization_action = PySide6.QtGui.QAction('CSS Customization', self)
         css_customization_action.triggered.connect(self.open_css_customization_dialog)
         settings_menu.addAction(css_customization_action)
+
+        # Crowdsourced location sharing (opt-in; persisted to settings).
+        self.reporting_action = PySide6.QtGui.QAction(
+            'Contribute Discovered Locations', self, checkable=True
+        )
+        self.reporting_action.setChecked(bool(self.location_reporting_enabled))
+        self.reporting_action.toggled.connect(self.toggle_location_reporting)
+        settings_menu.addAction(self.reporting_action)
 
         zoom_in_action = PySide6.QtGui.QAction('Zoom In', self)
         zoom_in_action.triggered.connect(self.zoom_in_browser)
@@ -2490,17 +2562,23 @@ class RBCCommunityMap(QMainWindow):
         if not items:
             return
 
+        pending_reports = []
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cur = conn.cursor()
                 for it in items:
-                    inserted = self._upsert_building(cur, it["cls"], it["name"], it["col"], it["row"])
-                    if inserted and it["cls"] in ("shop", "guild"):
-                        self._report_discovered_location(it["cls"], it["name"], it["col"], it["row"])
+                    action = self._upsert_building(cur, it["cls"], it["name"], it["col"], it["row"])
+                    if action:  # "inserted" or "updated" -> shareable, any building type
+                        pending_reports.append({**it, "action": action})
                 conn.commit()
             logging.debug(f"Auto-learned {len(items)} building(s) from page.")
         except Exception as e:
             logging.warning(f"Auto-learn DB step failed: {e}")
+            return
+
+        # Only share once the local write succeeded; batched + off-thread.
+        if pending_reports:
+            self._flush_reports(pending_reports)
 
     def _infer_col_row_from_dom(self, el) -> tuple[str | None, str | None]:
         """
@@ -2538,9 +2616,23 @@ class RBCCommunityMap(QMainWindow):
                 pass
         return s
 
-    def _upsert_building(self, cur: sqlite3.Cursor, cls: str, name: str, col: str, row: str) -> bool:
-        """
-        Returns True if a brand‑new record was inserted (useful for reporting hooks).
+    def _upsert_building(self, cur: sqlite3.Cursor, cls: str, name: str, col: str, row: str) -> str | None:
+        """Insert or update a learned building; return the action taken.
+
+        Returns:
+            "inserted" - a new row was created.
+            "updated"  - an existing mover's coordinates changed.
+            None       - nothing changed.
+
+        Fixtures (banks/taverns/transits/places-of-interest/lairs) are keyed by
+        ``(name, column, row)`` and only ever inserted; they do not move. Movers
+        (shops/guilds) are keyed by ``name`` and have their coordinates corrected
+        whenever the observed location differs from what is stored - this both
+        fills a hidden (``NA``) entry and follows a relocation to a new corner.
+
+        The non-``None`` actions are what drive crowdsourced reporting
+        (:meth:`_flush_reports`), so this is the single place that decides
+        "something worth sharing changed."
         """
         mapping = BUILDING_CLASS_MAP[cls]
         table = mapping["table"]
@@ -2549,53 +2641,78 @@ class RBCCommunityMap(QMainWindow):
         if table in ("banks", "taverns", "transits", "placesofinterest", "userbuildings"):
             cur.execute(f"SELECT 1 FROM {table} WHERE `Column`=? AND Row=? AND {name_col}=?", (col, row, name))
             if cur.fetchone():
-                return False
+                return None
             cur.execute(
                 f"INSERT INTO {table} (`Column`, Row, {name_col}) VALUES (?, ?, ?)",
                 (col, row, name)
             )
             logging.debug(f"Inserted {table}: {name} @ {col} & {row}")
-            return True
+            return "inserted"
 
-        if table == "shops":
-            cur.execute("SELECT `Column`, Row FROM shops WHERE Name=?", (name,))
+        if table in ("shops", "guilds"):
+            singular = table[:-1]
+            cur.execute(f"SELECT `Column`, Row FROM {table} WHERE Name=?", (name,))
             row0 = cur.fetchone()
-            if row0:
-                existing_col, existing_row = row0
-                if (existing_col in (None, "", "NA")) or (existing_row in (None, "", "NA")):
-                    cur.execute("UPDATE shops SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
-                    logging.debug(f"Updated shop coords: {name} -> {col} & {row}")
-                return False
-            cur.execute("INSERT INTO shops (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
-            logging.debug(f"Inserted shop: {name} @ {col} & {row}")
-            return True
+            if row0 is None:
+                cur.execute(f"INSERT INTO {table} (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
+                logging.debug(f"Inserted {singular}: {name} @ {col} & {row}")
+                return "inserted"
+            existing_col, existing_row = row0
+            if (existing_col, existing_row) != (col, row):
+                cur.execute(f"UPDATE {table} SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
+                logging.debug(f"Updated {singular} coords: {name} -> {col} & {row}")
+                return "updated"
+            return None
 
-        if table == "guilds":
-            cur.execute("SELECT `Column`, Row FROM guilds WHERE Name=?", (name,))
-            row0 = cur.fetchone()
-            if row0:
-                existing_col, existing_row = row0
-                if (existing_col in (None, "", "NA")) or (existing_row in (None, "", "NA")):
-                    cur.execute("UPDATE guilds SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
-                    logging.debug(f"Updated guild coords: {name} -> {col} & {row}")
-                return False
-            cur.execute("INSERT INTO guilds (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
-            logging.debug(f"Inserted guild: {name} @ {col} & {row}")
-            return True
-
-        return False
+        return None
 
     def _report_discovered_location(self, cls: str, name: str, col: str, row: str) -> None:
+        """Report a single discovered location (convenience wrapper)."""
+        self._flush_reports([{"cls": cls, "name": name, "col": col, "row": row}])
+
+    def _flush_reports(self, reports: list[dict]) -> None:
+        """Share discovered locations with the bot: off-thread, best-effort.
+
+        Gated by the user's opt-in (``self.location_reporting_enabled``); when
+        off, nothing leaves the machine. One POST carries the whole batch from a
+        page load. The request runs on a daemon thread so a slow or unreachable
+        endpoint never stalls page processing, and any failure is logged (not
+        raised) - the location will simply be re-sent the next time it is seen.
+
+        Only building kind/name/coordinates and an anonymous ``client_id`` are
+        sent - never character, position, or coins. See
+        docs/crowdsourced-location-reporting.md.
         """
-        Placeholder for your Discord/AVITD reporting (only called on brand‑new shops/guilds).
-        Safe to leave as no‑op until your API endpoint exists.
-        """
-        # Example (when ready):
-        # try:
-        #     requests.post(BOT_URL, json={"kind": cls, "name": name, "col": col, "row": row}, timeout=3)
-        # except Exception as e:
-        #     logging.info(f"Report skipped: {e}")
-        pass
+        if not reports or not self.location_reporting_enabled:
+            return
+
+        observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        payload = {
+            "reports": [
+                {
+                    "kind": r["cls"],
+                    "name": r["name"],
+                    "column": r["col"],
+                    "row": r["row"],
+                    "observed_at": observed_at,
+                    "client_id": self.client_id,
+                    "app_version": VERSION_NUMBER,
+                }
+                for r in reports
+            ]
+        }
+
+        def _send() -> None:
+            try:
+                resp = requests.post(REPORT_LOCATION_URL, json=payload, timeout=REPORT_TIMEOUT)
+                logging.debug(
+                    "Reported %d location(s); server responded %s",
+                    len(payload["reports"]), resp.status_code,
+                )
+            except requests.RequestException as e:
+                logging.info("Location report skipped (will retry on next sighting): %s", e)
+
+        threading.Thread(target=_send, name="location-report", daemon=True).start()
 
     # -----------------------
     # Minimap Drawing and Update
@@ -3744,7 +3861,15 @@ class RBCCommunityMap(QMainWindow):
             # Runs on the UI thread, so cap both the legacy blind wait and the
             # v2 poll budget to ~5s; a slow scrape must not freeze the window
             # (the startup path runs on a worker and uses the full budget).
-            data = fetch_location_update(sleep_seconds=5, poll_max_seconds=5)
+            data = fetch_location_update(
+                sleep_seconds=5,
+                poll_max_seconds=5,
+                known_timestamp=self.get_locations_last_updated(),
+            )
+
+            if data is None:
+                logging.info("Update Data: local data already current; nothing to update")
+                return
 
             self.update_database_with_json(data)
 
@@ -3754,6 +3879,137 @@ class RBCCommunityMap(QMainWindow):
         except Exception as e:
             logging.error(f"Unexpected error during update: {e}")
             QMessageBox.critical(self, "Error", str(e))
+
+    def get_locations_last_updated(self) -> str | None:
+        """Return the server ``last_updated`` value stored at our last write.
+
+        This is the authoritative "which generation of bot data do we hold"
+        marker (the server's own timestamp, not our local write time), used to
+        decide whether a /refresh "cooldown" response is actually newer than
+        what we already have. Returns ``None`` if we have never stored one.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.cursor().execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'locations_last_updated'"
+                ).fetchone()
+                return row[0] if row and row[0] else None
+        except Exception as e:
+            logging.warning(f"Could not read stored locations timestamp: {e}")
+            return None
+
+    # -----------------------
+    # Crowdsourced reporting preferences
+    # -----------------------
+
+    def load_location_reporting_setting(self) -> None:
+        """Read the reporting opt-in on startup; default ON when never set.
+
+        Sets ``self.location_reporting_enabled`` and records whether the
+        preference row was absent (``self._reporting_pref_was_unset``) so the
+        caller can decide to ask the user once on first run.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.cursor().execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'locations_reporting_enabled'"
+                ).fetchone()
+            if row is None or row[0] is None:
+                self._reporting_pref_was_unset = True
+                self.location_reporting_enabled = True  # provisional until the user chooses
+            else:
+                self._reporting_pref_was_unset = False
+                self.location_reporting_enabled = bool(int(row[0]))
+        except (sqlite3.Error, ValueError, TypeError) as e:
+            logging.warning(f"Could not read reporting preference; defaulting ON: {e}")
+            self._reporting_pref_was_unset = False
+            self.location_reporting_enabled = True
+
+    def toggle_location_reporting(self, enabled: bool) -> None:
+        """Enable/disable sharing discovered locations with the bot; persist it.
+
+        Mirrors :meth:`toggle_keybind_config`: update in-memory state and write
+        the choice to the ``settings`` table so it survives restarts. Takes
+        effect immediately (checked by the reporter before every send).
+        """
+        self.location_reporting_enabled = bool(enabled)
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.cursor().execute(
+                    """
+                    INSERT INTO settings (setting_name, setting_value)
+                    VALUES ('locations_reporting_enabled', ?)
+                    ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                    """,
+                    (1 if enabled else 0,),
+                )
+                conn.commit()
+            logging.info("Location reporting %s", "enabled" if enabled else "disabled")
+        except sqlite3.Error as e:
+            logging.error(f"Failed to save reporting preference: {e}")
+
+    def prompt_first_run_reporting_choice(self) -> None:
+        """Ask once whether to contribute discovered locations, and store it.
+
+        Only invoked when no preference row exists yet (see
+        :meth:`load_location_reporting_setting`). Whichever button the user
+        picks is persisted, so this never asks again. Closing the dialog
+        defaults to the privacy-preserving choice (No / do not share).
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Contribute Discovered Locations?")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText("Help keep the community map current?")
+        box.setInformativeText(
+            "As you explore, this app can share the guild, shop, and building "
+            "locations you walk past with the map's update bot, so everyone's "
+            "map stays current between reveal cycles.\n\n"
+            "Only building names and coordinates are ever sent — never your "
+            "character, position, or coins. You can change this anytime under "
+            "Settings → “Contribute Discovered Locations”."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        choice = box.exec()
+
+        enabled = choice == QMessageBox.StandardButton.Yes
+        self.toggle_location_reporting(enabled)
+        self._reporting_pref_was_unset = False
+        # Sync the menu check without re-triggering the persist handler.
+        if hasattr(self, "reporting_action") and self.reporting_action is not None:
+            self.reporting_action.blockSignals(True)
+            self.reporting_action.setChecked(enabled)
+            self.reporting_action.blockSignals(False)
+
+    def _get_or_create_client_id(self) -> str:
+        """Return this install's anonymous reporting id, creating one if needed.
+
+        A random UUID stored in ``settings``; it identifies the install for
+        server-side rate limiting/dedupe only. It is never tied to the user's
+        email, character, or any personal data.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                row = cur.execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'client_id'"
+                ).fetchone()
+                if row and row[0]:
+                    return str(row[0])
+                new_id = uuid.uuid4().hex
+                cur.execute(
+                    """
+                    INSERT INTO settings (setting_name, setting_value)
+                    VALUES ('client_id', ?)
+                    ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                    """,
+                    (new_id,),
+                )
+                conn.commit()
+                return new_id
+        except sqlite3.Error as e:
+            logging.warning(f"Could not persist client_id; using ephemeral id: {e}")
+            return uuid.uuid4().hex
 
     def update_database_with_json(self, data):
         """
@@ -3767,6 +4023,7 @@ class RBCCommunityMap(QMainWindow):
                 scrape_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                 guilds_next = data.get("guilds_next_update")
                 shops_next = data.get("shops_next_update")
+                server_last_updated = data.get("last_updated")
 
                 # Clear old locations except Peacekeepers
                 cursor.execute("""
@@ -3802,6 +4059,19 @@ class RBCCommunityMap(QMainWindow):
                         VALUES (?, ?, ?, ?, ?)""",
                                    (name, col, row, shops_next, scrape_timestamp)
                                    )
+
+                # Record the server's own data timestamp so later /refresh
+                # "cooldown" responses can be compared against what we hold
+                # (see get_locations_last_updated / fetch_location_update).
+                if server_last_updated:
+                    cursor.execute(
+                        """
+                        INSERT INTO settings (setting_name, setting_value)
+                        VALUES ('locations_last_updated', ?)
+                        ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                        """,
+                        (server_last_updated,),
+                    )
 
                 conn.commit()
                 logging.info(f"Database updated with {len(data.get('guilds', {}))} guilds and {len(data.get('shops', {}))} shops.")
