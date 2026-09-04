@@ -49,20 +49,36 @@ def _timestamp_advanced(latest_ts, baseline_ts) -> bool:
     return latest_ts > baseline_ts
 
 
-def _fetch_location_update_v2(timeout: int, log_prefix: str, poll_max_seconds: float) -> dict:
+def _fetch_location_update_v2(
+    timeout: int,
+    log_prefix: str,
+    poll_max_seconds: float,
+    known_timestamp: str | None = None,
+) -> dict | None:
     """Tokenless refresh flow: trigger via /refresh, then poll for fresh data.
 
     Asks the API to refresh (cooldown-gated, no token round-trip). If the API
     reports it actually triggered a scrape, poll locations.json until its
     ``last_updated`` field advances past the pre-trigger value, so we return
-    genuinely fresh data instead of guessing with a fixed sleep. If the API
-    reports it is cooling down, the data is already fresh and we fetch it
-    immediately. Any other status is treated as a failure rather than silently
-    accepting whatever is on disk (which would rewrite last_scraped and make
-    stale data look current).
+    genuinely fresh data instead of guessing with a fixed sleep.
+
+    If the API reports it is cooling down, the bot scraped recently but not
+    necessarily since our last write. We compare the server's ``last_updated``
+    against ``known_timestamp`` (what we last stored locally): only pull the
+    JSON down when the server copy is strictly newer, so a cooldown response
+    for data we already hold does not rewrite the DB (and its last_scraped)
+    with unchanged rows. When the server is not newer we return ``None`` to
+    tell the caller there is nothing to update.
+
+    Any other status is treated as a failure rather than silently accepting
+    whatever is on disk (which would rewrite last_scraped and make stale data
+    look current).
 
     ``poll_max_seconds`` bounds how long we wait for a triggered scrape to land;
     callers on the UI thread pass a small budget to stay responsive.
+
+    Returns the parsed locations JSON, or ``None`` when a cooldown response
+    shows the local copy is already current.
     """
     logging.info("%sRequesting map refresh...", log_prefix)
     resp = requests.post(UPDATE_REFRESH_URL, timeout=timeout)
@@ -73,9 +89,21 @@ def _fetch_location_update_v2(timeout: int, log_prefix: str, poll_max_seconds: f
     status = info.get("status")
 
     if status == "cooldown":
-        # Bot scraped within the cooldown window; data is already current.
-        logging.info("%sData already fresh (cooldown); fetching current locations", log_prefix)
-        return _fetch_locations_json(timeout)
+        # Bot scraped within the cooldown window. Only pull it down if the
+        # server's copy is genuinely newer than what we already stored;
+        # otherwise the local DB is already current and a re-write would just
+        # churn last_scraped with identical data.
+        if _timestamp_advanced(baseline, known_timestamp):
+            logging.info(
+                "%sCooldown, but server data is newer (%s > %s); fetching current locations",
+                log_prefix, baseline, known_timestamp,
+            )
+            return _fetch_locations_json(timeout)
+        logging.info(
+            "%sCooldown and local data already current (server=%s, local=%s); skipping fetch",
+            log_prefix, baseline, known_timestamp,
+        )
+        return None
 
     if status != "triggered":
         # Unknown / error status: do not accept it as fresh data.
@@ -123,7 +151,8 @@ def fetch_location_update(
     timeout: int = HTTP_REQUEST_TIMEOUT,
     log_prefix: str = "",
     poll_max_seconds: float = REFRESH_POLL_MAX_SECONDS,
-) -> dict:
+    known_timestamp: str | None = None,
+) -> dict | None:
     """Refresh locations.json from the bot and return it parsed.
 
     Prefers the tokenless /refresh endpoint (:func:`_fetch_location_update_v2`),
@@ -140,9 +169,15 @@ def fetch_location_update(
             Callers on the UI thread (manual "Update Data") pass a small value
             so the window does not freeze on a slow scrape; the startup worker
             runs off-thread and can use the full default budget.
+        known_timestamp: the server ``last_updated`` value already stored
+            locally. On a /refresh "cooldown" response the JSON is pulled down
+            only when the server's timestamp is strictly newer than this, so
+            unchanged data does not needlessly rewrite the DB.
 
     Returns:
-        The parsed locations JSON as a dict.
+        The parsed locations JSON as a dict, or ``None`` when a cooldown
+        response shows the local copy is already current (nothing to update).
+        The legacy fallback path always returns a dict.
 
     Raises:
         requests.RequestException: on any network/HTTP error.
@@ -150,7 +185,7 @@ def fetch_location_update(
             server returns an unrecognized /refresh status.
     """
     try:
-        return _fetch_location_update_v2(timeout, log_prefix, poll_max_seconds)
+        return _fetch_location_update_v2(timeout, log_prefix, poll_max_seconds, known_timestamp)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else None
         if status not in (404, 405):
@@ -180,12 +215,26 @@ class StartupUpdateWorker(QObject):
                 sleep_seconds=10,
                 timeout=self.REQUEST_TIMEOUT,
                 log_prefix="[Startup] ",
+                known_timestamp=self.app.get_locations_last_updated(),
             )
 
-            self.app.update_database_with_json(data)
+            if data is None:
+                logging.info("[Startup] Local data already current; no update needed")
+                msg = "Data already up to date"
+            else:
+                self.app.update_database_with_json(data)
+                logging.info("[Startup] Database updated with fresh bot data")
+                msg = "Initial data update completed"
 
-            logging.info("[Startup] Database updated with fresh bot data")
-            self.finished.emit(True, "Initial data update completed")
+            # Pull crowdsourced non-mover buildings regardless of the locations
+            # cooldown (independent data set). Network + DB only here; the UI
+            # redraw happens in _on_startup_update_finished on the main thread.
+            try:
+                self.app.fetch_and_merge_community_buildings(timeout=self.REQUEST_TIMEOUT)
+            except Exception as exc:
+                logging.warning("[Startup] Community buildings merge failed: %s", exc)
+
+            self.finished.emit(True, msg)
 
         except requests.RequestException as exc:
             logging.warning(
@@ -299,6 +348,12 @@ class RBCCommunityMap(QMainWindow):
         # Self-learning building cache
         self._seen_buildings: set[tuple[str, str, str]] = set()
 
+        # Crowdsourced reporting prefs (populated by _init_reporting_prefs()).
+        self.location_reporting_enabled = True
+        self.client_id = None
+        self.report_credit = "Anonymous"
+        self._reporting_pref_was_unset = False
+
         # -----------------------
         # Initialization Pipeline
         # -----------------------
@@ -308,6 +363,7 @@ class RBCCommunityMap(QMainWindow):
         self._init_web_profile()
         self._init_ui_state()
         self._init_characters()
+        self._init_reporting_prefs()
         self._init_ui_components()
         self._finalize_setup()
 
@@ -399,14 +455,18 @@ class RBCCommunityMap(QMainWindow):
 
         self.map_icons = {
             "bank": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "bank.png")),
-            "tavern": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "saloon.png")),
+            "tavern": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "tavern.png")),
             "transit": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "transit.png")),
-            "user_building": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "castle.png")),
+            "user_building": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "lair.png")),
             "guild": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "guild.png")),
             "shop": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "shop.png")),
             "graveyard": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "graveyard.png")),
-            "hall_binding": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "binding.png")),
-            "hall_severance": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "severance.png")),
+            "graveyard": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "graveyard.png")),
+            "arena": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "arena.png")),
+            "alchemy": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "alchemy.png")),
+            "placesofinterest": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "place_of_interest.png")),
+            "hall_binding": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "hall_binding.png")),
+            "hall_severance": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "hall_severance.png")),
         }
 
     @splash_message(lambda self: self.splash, "Loading characters")
@@ -419,6 +479,19 @@ class RBCCommunityMap(QMainWindow):
         if not self.characters:
             self.firstrun_character_creation()
 
+    @splash_message(lambda self: self.splash, "Loading preferences")
+    def _init_reporting_prefs(self) -> None:
+        """Load the crowdsourced-reporting opt-in and anonymous client id.
+
+        Runs before the UI is built so the Settings-menu toggle can reflect the
+        stored choice. If the preference has never been set (true first run, or
+        upgrade from a version without it), ``_reporting_pref_was_unset`` is
+        flagged so :meth:`_finalize_setup` can ask the user once.
+        """
+        self.load_location_reporting_setting()
+        self.client_id = self._get_or_create_client_id()
+        self.report_credit = self._load_report_credit()
+
     @splash_message(lambda self: self.splash, "Building interface")
     def _init_ui_components(self) -> None:
         self.setup_ui_components()
@@ -427,6 +500,11 @@ class RBCCommunityMap(QMainWindow):
     @splash_message(lambda self: self.splash, "Finalizing startup")
     def _finalize_setup(self) -> None:
         self.show()
+
+        # First-run (or first upgrade) opt-in for sharing discovered locations.
+        # Deferred until the window is shown so the dialog has a visible parent.
+        if self._reporting_pref_was_unset:
+            QTimer.singleShot(0, self.prompt_first_run_reporting_choice)
 
         if self.selected_character and self.destination:
             self.update_minimap()
@@ -468,9 +546,10 @@ class RBCCommunityMap(QMainWindow):
         try:
             if hasattr(self, "refresh_all_dropdowns"):
                 self.refresh_all_dropdowns()
-            if ok and self.selected_character and self.destination:
-                # Optional: if new data affects routes, refresh minimap
-                self.update_minimap()
+            # Reload building/coordinate mappings so freshly written locations and
+            # crowdsourced buildings appear without a restart (runs on UI thread).
+            if ok:
+                self.refresh_map_data_from_db()
         except Exception as e:
             logging.warning(f"Post-startup refresh error: {e}")
         self._set_status(("✅ " if ok else "❌ ") + msg)
@@ -690,6 +769,194 @@ class RBCCommunityMap(QMainWindow):
             self.color_mappings = {"background": PySide6.QtGui.QColor("#3b3b3b"),
                                    "text_color": PySide6.QtGui.QColor("#dddddd")}
 
+        # Resolve colors with precedence: RBC defaults < active CSS < user picks
+        # (both apply the persisted minimap_css_overrides on top).
+        self.apply_minimap_colors_from_css()
+        self.apply_ui_theme_from_css()
+
+    @staticmethod
+    def _css_color(value: str) -> PySide6.QtGui.QColor:
+        """Convert common CSS colors to a QColor, including rgb()/rgba()."""
+        value = value.strip()
+        rgb = re.fullmatch(r"rgba?\(\s*([\d.]+)%?\s*,\s*([\d.]+)%?\s*,\s*([\d.]+)%?(?:\s*,\s*([\d.]+%?))?\s*\)", value, re.IGNORECASE)
+        if rgb:
+            parts = rgb.groups()
+            channels = [float(parts[i]) * (2.55 if '%' in value.split(',')[i] else 1) for i in range(3)]
+            alpha = parts[3]
+            alpha_value = round(float(alpha[:-1]) * 2.55) if alpha and alpha.endswith('%') else round(float(alpha) * 255) if alpha else 255
+            return PySide6.QtGui.QColor(round(channels[0]), round(channels[1]), round(channels[2]), alpha_value)
+        return PySide6.QtGui.QColor(value)
+
+    @staticmethod
+    def _css_background_color(css: str, selector: str) -> str | None:
+        """Return the CSS background-color declared for ``selector`` in ``css``.
+
+        Parses each ``<selector-list> { ... }`` rule, so a grouped selector such
+        as ``SPAN.lair,SPAN.alchemy { ... }`` still matches ``span.lair``.
+        Returns the last matching ``background-color`` (later rules win), or
+        ``None`` if none is declared. Values remain in CSS form so Qt can
+        handle hex, rgb/rgba, named colors, and ``transparent``.
+        """
+        if not css or not selector:
+            return None
+        want = selector.strip().lower()
+        found = None
+        for rule in re.finditer(r"([^{}]+)\{([^}]*)\}", css):
+            selectors = [s.strip().lower() for s in rule.group(1).split(",")]
+            if want in selectors:
+                cm = re.search(r"background-color\s*:\s*([^;]+)", rule.group(2), re.IGNORECASE)
+                if cm:
+                    value = cm.group(1).strip()
+                    color = RBCCommunityMap._css_color(value)
+                    if color.isValid():
+                        found = color.name(PySide6.QtGui.QColor.NameFormat.HexArgb)
+        return found
+
+    @staticmethod
+    def _css_property_color(css: str, selector: str, property_name: str) -> str | None:
+        """Return the last usable color from a CSS color/border property."""
+        value = None
+        for rule in re.finditer(r"([^{}]+)\{([^}]*)\}", css or ""):
+            selectors = [s.strip().lower() for s in rule.group(1).split(",")]
+            if selector.strip().lower() not in selectors:
+                continue
+            # Lookbehind so "color" does not match inside "background-color"
+            # (or "border-color"), which would make text/border colors wrongly
+            # inherit the fill color (e.g. green-on-green, invisible labels).
+            declaration = re.search(rf"(?<![\w-]){re.escape(property_name)}\s*:\s*([^;]+)", rule.group(2), re.IGNORECASE)
+            if not declaration:
+                continue
+            raw = declaration.group(1).strip()
+            if property_name.lower() == "border":
+                candidates = re.findall(r"(?:#[0-9a-fA-F]{3,8}|rgba?\([^)]*\)|\b[a-z]+\b)", raw, re.IGNORECASE)
+                raw = next((candidate for candidate in candidates if RBCCommunityMap._css_color(candidate).isValid()), raw)
+            color = RBCCommunityMap._css_color(raw)
+            if color.isValid():
+                value = color.name(PySide6.QtGui.QColor.NameFormat.HexArgb)
+        return value
+
+    def apply_minimap_colors_from_css(self) -> None:
+        """Set the minimap's building/map colors from the active CSS.
+
+        For each mapped element (see CSS_MINIMAP_SELECTORS) the color is taken
+        from the currently active custom CSS if it declares one, otherwise from
+        the RBC default palette (DEFAULT_MINIMAP_COLORS). Elements with no
+        game-CSS equivalent (guild, alley, ...) keep their theme value.
+        """
+        try:
+            css = self.load_current_css() or ""
+        except Exception:
+            css = ""
+        if not isinstance(getattr(self, "color_mappings", None), dict):
+            self.color_mappings = {}
+        background = self._css_background_color(css, CSS_MINIMAP_SELECTORS["background"])
+        # The game page is black even when a custom profile omits an explicit
+        # body background rule; transparent custom grid cells must sit on
+        # black, not on Qt's light-gray widget default.
+        self.minimap_background_color = PySide6.QtGui.QColor(background or "#000000")
+        self.minimap_text_colors = {}
+        self.minimap_border_colors = {}
+        # User overrides (highest precedence) persisted under minimap_css_overrides.
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'minimap_css_overrides'"
+                ).fetchone()
+            stored_overrides = json.loads(row[0]) if row and row[0] else {}
+            if not isinstance(stored_overrides, dict):
+                stored_overrides = {}
+        except (sqlite3.Error, json.JSONDecodeError, TypeError):
+            stored_overrides = {}
+        stored_overrides.update(getattr(self, "minimap_css_overrides", {}))
+        self.minimap_css_overrides = stored_overrides
+        for key, default_hex in DEFAULT_MINIMAP_COLORS.items():
+            selector = CSS_MINIMAP_SELECTORS.get(key)
+            hex_val = self._css_background_color(css, selector) if selector else None
+            self.color_mappings[key] = PySide6.QtGui.QColor(hex_val or default_hex)
+            # defaults < CSS < user override
+            if key in stored_overrides:
+                override = PySide6.QtGui.QColor(stored_overrides[key])
+                if override.isValid():
+                    self.color_mappings[key] = override
+            if selector:
+                text = self._css_property_color(css, selector, "color")
+                border = self._css_property_color(css, selector, "border-color") or self._css_property_color(css, selector, "border")
+                self.minimap_text_colors[key] = PySide6.QtGui.QColor(text or "white")
+                self.minimap_border_colors[key] = PySide6.QtGui.QColor(border or "white")
+
+    @staticmethod
+    def _blend(c1: "PySide6.QtGui.QColor", c2: "PySide6.QtGui.QColor", t: float) -> "PySide6.QtGui.QColor":
+        """Linear blend from c1 toward c2 by t in [0, 1]."""
+        return PySide6.QtGui.QColor(
+            round(c1.red() * (1 - t) + c2.red() * t),
+            round(c1.green() * (1 - t) + c2.green() * t),
+            round(c1.blue() * (1 - t) + c2.blue() * t),
+        )
+
+    @staticmethod
+    def _readable_text(bg: "PySide6.QtGui.QColor") -> "PySide6.QtGui.QColor":
+        """Return black or white, whichever is more readable on ``bg``."""
+        # Perceived luminance (sRGB weights); light bg -> dark text, dark -> light.
+        lum = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255.0
+        return PySide6.QtGui.QColor("#000000") if lum > 0.55 else PySide6.QtGui.QColor("#e6e6e6")
+
+    def apply_ui_theme_from_css(self) -> None:
+        """Derive the whole-app UI theme from the active game CSS.
+
+        Pulls the window background from ``body``'s background, body text color
+        from ``body``/``p``/``td``, and an accent from the ``h1`` heading (RBC's
+        red title by default). Button/surface shades are derived by blending so
+        the app always stays readable regardless of the loaded profile. Falls
+        back to the RBC default palette (black bg, light text, red accent).
+        These feed :meth:`apply_theme`.
+        """
+        try:
+            css = self.load_current_css() or ""
+        except Exception:
+            css = ""
+        if not isinstance(getattr(self, "color_mappings", None), dict):
+            self.color_mappings = {}
+        bg_hex = self._css_background_color(css, "body")
+        text_hex = (self._css_property_color(css, "body", "color")
+                    or self._css_property_color(css, "p", "color")
+                    or self._css_property_color(css, "td", "color"))
+        accent_hex = self._css_property_color(css, "h1", "color")
+
+        bg = PySide6.QtGui.QColor(bg_hex or "#000000")
+        text = PySide6.QtGui.QColor(text_hex or "#dddddd")
+        accent = PySide6.QtGui.QColor(accent_hex or "#ff0000")
+        self.color_mappings["background"] = bg
+        self.color_mappings["text_color"] = text
+        self.color_mappings["accent"] = accent
+        # Buttons/inputs: a surface a bit lifted from the background so controls
+        # read as distinct without a second CSS source.
+        self.color_mappings["button_color"] = self._blend(bg, text, 0.20)
+        # User overrides win over the CSS/default UI palette (same store the
+        # minimap uses), so a hand-picked background/text/button/accent sticks.
+        overrides = getattr(self, "minimap_css_overrides", None) or {}
+        for key in ("background", "text_color", "button_color", "accent",
+                    "button_border_color", "button_hover_color", "button_pressed_color"):
+            if key in overrides:
+                qc = PySide6.QtGui.QColor(overrides[key])
+                if qc.isValid():
+                    self.color_mappings[key] = qc
+
+    @staticmethod
+    def _poi_style_key(name: str) -> str:
+        """Map known POI names to the same CSS class used by the game page."""
+        normalized = name.strip().lower()
+        if "binding" in normalized:
+            return "bind"
+        if "severance" in normalized:
+            return "sever"
+        if "grave" in normalized:
+            return "graveyard"
+        if any(token in normalized for token in ("arena", "battle arena")):
+            return "placesofinterest"
+        if any(token in normalized for token in ("alchemy", "cloister", "aubade", "hospital")):
+            return "alchemy"
+        return "placesofinterest"
+
     def save_theme_settings(self) -> bool:
         """
         Save current color mappings to the color_mappings table in the database.
@@ -708,6 +975,11 @@ class RBCCommunityMap(QMainWindow):
                     ''',
                     [(key, color.name()) for key, color in self.color_mappings.items()]
                 )
+                cursor.execute(
+                    "INSERT INTO settings (setting_name, setting_value) VALUES (?, ?) "
+                    "ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value",
+                    ("minimap_css_overrides", json.dumps(getattr(self, "minimap_css_overrides", {}))),
+                )
                 conn.commit()
                 logging.debug("Theme settings saved to color_mappings table.")
                 return True
@@ -718,14 +990,38 @@ class RBCCommunityMap(QMainWindow):
     def apply_theme(self) -> None:
         """Apply current theme settings to the application's stylesheet."""
         try:
-            bg_color = self.color_mappings.get("background", PySide6.QtGui.QColor("#d4d4d4")).name()
-            text_color = self.color_mappings.get("text_color", PySide6.QtGui.QColor("#000000")).name()
-            btn_color = self.color_mappings.get("button_color", PySide6.QtGui.QColor("#b1b1b1")).name()
+            bg = self.color_mappings.get("background", PySide6.QtGui.QColor("#2b2b2b"))
+            text = self.color_mappings.get("text_color", PySide6.QtGui.QColor("#dddddd"))
+            btn = self.color_mappings.get("button_color", PySide6.QtGui.QColor("#444444"))
+            accent = self.color_mappings.get("accent", PySide6.QtGui.QColor("#ff0000"))
+
+            # Button border/hover honor explicit user overrides, else the accent.
+            # Subtle resting border by default; accent is reserved for hover.
+            border = self.color_mappings.get("button_border_color") or self._blend(bg, text, 0.35)
+            hover = self.color_mappings.get("button_hover_color", accent)
+
+            bg_color, text_color, btn_color, acc = bg.name(), text.name(), btn.name(), accent.name()
+            border_h, hover_h = border.name(), hover.name()
+            btn_text = self._readable_text(btn).name()
+            acc_text = self._readable_text(accent).name()
+            hover_text = self._readable_text(hover).name()
+            field_bg = self._blend(bg, text, 0.10).name()
+            # A slightly stronger line than the button border, used to outline
+            # the main panels so the minimap edge reads distinctly from the app.
+            section_border = self._blend(bg, text, 0.55).name()
 
             stylesheet = (
                 f"QWidget {{ background-color: {bg_color}; color: {text_color}; }}"
-                f"QPushButton {{ background-color: {btn_color}; color: {text_color}; }}"
+                f"QFrame#leftFrame, QFrame#minimapFrame, QFrame#infoFrame, QFrame#characterFrame {{"
+                f" border: 1px solid {section_border}; }}"
+                f"QPushButton {{ background-color: {btn_color}; color: {btn_text};"
+                f" border: 1px solid {border_h}; border-radius: 4px; padding: 3px 6px; }}"
+                f"QPushButton:hover {{ background-color: {hover_h}; color: {hover_text}; }}"
                 f"QLabel {{ color: {text_color}; }}"
+                f"QMenuBar, QMenu {{ background-color: {bg_color}; color: {text_color}; }}"
+                f"QMenuBar::item:selected, QMenu::item:selected {{ background-color: {acc}; color: {acc_text}; }}"
+                f"QLineEdit, QComboBox, QListWidget, QTextEdit, QSpinBox {{"
+                f" background-color: {field_bg}; color: {text_color}; border: 1px solid {btn_color}; }}"
             )
             self.setStyleSheet(stylesheet)
             logging.debug("Theme applied successfully")
@@ -740,10 +1036,24 @@ class RBCCommunityMap(QMainWindow):
         Assumes ThemeCustomizationDialog is defined elsewhere with exec() and color_mappings.
         """
         dialog = ThemeCustomizationDialog(self, color_mappings=self.color_mappings)
-        dialog = ThemeCustomizationDialog(self, color_mappings=self.color_mappings)
         if dialog.exec():
             self.color_mappings = dialog.color_mappings
+            # Only the elements the user actually changed become overrides
+            # (highest precedence); everything else still follows CSS/defaults.
+            overrides = dict(getattr(self, "minimap_css_overrides", {}))
+            overrides.update({
+                key: self.color_mappings[key].name()
+                for key in dialog.changed_minimap_elements
+                if key in self.color_mappings
+            })
+            self.minimap_css_overrides = overrides
             self.apply_theme()
+            self.apply_minimap_colors_from_css()
+            try:
+                if self.character_x is not None and self.character_y is not None:
+                    self.update_minimap()
+            except Exception as e:
+                logging.debug(f"Minimap redraw after theme change skipped: {e}")
             if self.save_theme_settings():
                 logging.info("Theme updated and saved")
             else:
@@ -1024,12 +1334,14 @@ class RBCCommunityMap(QMainWindow):
         # Left layout containing the minimap and control buttons
         left_layout = QVBoxLayout()
         left_frame = QFrame()
+        left_frame.setObjectName("leftFrame")
         left_frame.setFrameShape(QFrame.Shape.Box)
         left_frame.setFixedWidth(300)
         left_frame.setLayout(left_layout)
 
         # Minimap setup
         minimap_frame = QFrame()
+        minimap_frame.setObjectName("minimapFrame")
         minimap_frame.setFrameShape(QFrame.Shape.Box)
         minimap_frame.setFixedSize(self.minimap_size, self.minimap_size)
         minimap_layout = QVBoxLayout()
@@ -1045,6 +1357,7 @@ class RBCCommunityMap(QMainWindow):
 
         # Information frame to display nearest locations and AP costs
         info_frame = QFrame()
+        info_frame.setObjectName("infoFrame")
         info_frame.setFrameShape(QFrame.Shape.Box)
         info_frame.setFixedHeight(260)
         info_layout = QVBoxLayout()
@@ -1159,22 +1472,31 @@ class RBCCommunityMap(QMainWindow):
 
         left_layout.addLayout(combo_go_layout)
 
-        # Zoom and action buttons
-        zoom_layout = QHBoxLayout()
-        button_size = (self.minimap_size - 10) // 3
+        # Zoom and action buttons. Each expands to share the panel width evenly
+        # (so a long label like "Set Destination" is not clipped) and uses a
+        # slightly smaller point size to fit three-across in the 300px column.
+        def _make_action_button(label: str) -> QPushButton:
+            btn = QPushButton(label)
+            btn.setFixedHeight(25)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            f = btn.font()
+            f.setPointSize(8)
+            btn.setFont(f)
+            return btn
 
-        zoom_in_button = QPushButton('Zoom in')
-        zoom_in_button.setFixedSize(button_size, 25)
+        zoom_layout = QHBoxLayout()
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+        zoom_layout.setSpacing(4)
+
+        zoom_in_button = _make_action_button('Zoom in')
         zoom_in_button.clicked.connect(self.zoom_in)
         zoom_layout.addWidget(zoom_in_button)
 
-        zoom_out_button = QPushButton('Zoom out')
-        zoom_out_button.setFixedSize(button_size, 25)
+        zoom_out_button = _make_action_button('Zoom out')
         zoom_out_button.clicked.connect(self.zoom_out)
         zoom_layout.addWidget(zoom_out_button)
 
-        set_destination_button = QPushButton('Set Destination')
-        set_destination_button.setFixedSize(button_size, 25)
+        set_destination_button = _make_action_button('Set Destination')
         set_destination_button.clicked.connect(self.open_SetDestinationDialog)
         zoom_layout.addWidget(set_destination_button)
 
@@ -1182,19 +1504,18 @@ class RBCCommunityMap(QMainWindow):
 
         # Layout for refresh, discord, and website buttons
         action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_layout.setSpacing(4)
 
-        refresh_button = QPushButton('Refresh')
-        refresh_button.setFixedSize(button_size, 25)
+        refresh_button = _make_action_button('Refresh')
         refresh_button.clicked.connect(lambda: self.website_frame.setUrl(QUrl('https://quiz.ravenblack.net/blood.pl')))
         action_layout.addWidget(refresh_button)
 
-        discord_button = QPushButton('Discord')
-        discord_button.setFixedSize(button_size, 25)
+        discord_button = _make_action_button('Discord')
         discord_button.clicked.connect(self.open_discord)
         action_layout.addWidget(discord_button)
 
-        website_button = QPushButton('Website')
-        website_button.setFixedSize(button_size, 25)
+        website_button = _make_action_button('Website')
         website_button.clicked.connect(self.open_website)
         action_layout.addWidget(website_button)
 
@@ -1202,6 +1523,7 @@ class RBCCommunityMap(QMainWindow):
 
         # Character list frame
         character_frame = QFrame()
+        character_frame.setObjectName("characterFrame")
         character_frame.setFrameShape(QFrame.Shape.Box)
         character_layout = QVBoxLayout()
         character_frame.setLayout(character_layout)
@@ -1304,6 +1626,18 @@ class RBCCommunityMap(QMainWindow):
         css_customization_action = PySide6.QtGui.QAction('CSS Customization', self)
         css_customization_action.triggered.connect(self.open_css_customization_dialog)
         settings_menu.addAction(css_customization_action)
+
+        # Crowdsourced location sharing (opt-in; persisted to settings).
+        self.reporting_action = PySide6.QtGui.QAction(
+            'Contribute Discovered Locations', self, checkable=True
+        )
+        self.reporting_action.setChecked(bool(self.location_reporting_enabled))
+        self.reporting_action.toggled.connect(self.toggle_location_reporting)
+        settings_menu.addAction(self.reporting_action)
+
+        credit_action = PySide6.QtGui.QAction('Set Contribution Credit…', self)
+        credit_action.triggered.connect(self.prompt_report_credit)
+        settings_menu.addAction(credit_action)
 
         zoom_in_action = PySide6.QtGui.QAction('Zoom In', self)
         zoom_in_action.triggered.connect(self.zoom_in_browser)
@@ -2456,75 +2790,159 @@ class RBCCommunityMap(QMainWindow):
     def switch_css_profile(self, profile_name: str) -> None:
         self.current_css_profile = profile_name
         self.apply_custom_css()
+        # Re-resolve colors (defaults < new CSS < user overrides) and repaint.
+        self.apply_minimap_colors_from_css()
+        self.apply_ui_theme_from_css()
+        self.apply_theme()
+        try:
+            if self.character_x is not None and self.character_y is not None:
+                self.update_minimap()
+        except Exception as e:
+            logging.debug(f"Minimap redraw after CSS switch skipped: {e}")
         logging.info(f"Switched to profile: {profile_name} and applied CSS")
 
     def learn_buildings_from_html(self, html: str) -> None:
+        """Learn buildings visible on the game page and share them.
+
+        Each building's map location is resolved from the RBC grid itself (the
+        hidden ``move`` form's x/y in the building's cell) rather than a text
+        label - the cell a building sits in carries no coordinate text. The
+        cell you are standing in has no move form, so it resolves from the
+        already-parsed character position (see ``_building_game_coord``). The
+        game x/y is mapped to a street name via the ``columns``/``rows`` tables.
+
+        Every building found is upserted locally (idempotent, so it re-adds a
+        row deleted from the DB) and, once per session, queued for reporting so
+        the shared files gain anything they are missing (the server dedups by
+        location on its side, routing movers -> locations.json and non-movers
+        -> community_buildings.json).
+        """
         soup = BeautifulSoup(html, "html.parser")
         selector = ",".join(f"span.{cls}" for cls in BUILDING_CLASS_MAP.keys())
         if not selector:
             return
 
+        # game coordinate -> street name (inverse of the columns/rows tables)
+        inv_cols = {v: k for k, v in (self.columns or {}).items()}
+        inv_rows = {v: k for k, v in (self.rows or {}).items()}
+        if not inv_cols or not inv_rows:
+            return
+
         items = []
         for el in soup.select(selector):
-            classes = [c for c in (el.get("class") or []) if c in BUILDING_CLASS_MAP]
-            if not classes:
-                continue
-            cls = classes[0]
-
-            raw = el.get_text(" ", strip=True) or (el.get("title") or "")
-            name = self.normalize_building_name(raw)
-            if not name:
+            cls = next((c for c in (el.get("class") or []) if c in BUILDING_CLASS_MAP), None)
+            if not cls:
                 continue
 
-            col, row = self._infer_col_row_from_dom(el)
+            gx, gy = self._building_game_coord(el)
+            if gx is None or gy is None:
+                continue
+            col = inv_cols.get(gx)
+            row = inv_rows.get(gy)
             if not col or not row:
                 continue
 
-            sig = (cls, name, f"{col}|{row}")
-            if sig in self._seen_buildings:
+            name = self._building_display_name(cls, el)
+            if not name:
                 continue
-            self._seen_buildings.add(sig)
+
+            # Special curated Places of Interest must not leak into the regular
+            # shops/userbuildings tables (e.g. Cloister of Secrets is a fixed
+            # shop; Kindred Hospital is a lair).
+            if self._is_curated_poi(cls, name, el):
+                continue
 
             items.append({"cls": cls, "name": name, "col": col, "row": row})
 
         if not items:
             return
 
+        pending_reports = []
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cur = conn.cursor()
                 for it in items:
-                    inserted = self._upsert_building(cur, it["cls"], it["name"], it["col"], it["row"])
-                    if inserted and it["cls"] in ("shop", "guild"):
-                        self._report_discovered_location(it["cls"], it["name"], it["col"], it["row"])
+                    # Idempotent local add/update (re-adds a manually deleted row).
+                    self._upsert_building(cur, it["cls"], it["name"], it["col"], it["row"])
+                    # Report each building once per session so the shared files
+                    # gain anything they lack; the server dedups by location.
+                    sig = (it["cls"], it["name"], f"{it['col']}|{it['row']}")
+                    if sig not in self._seen_buildings:
+                        self._seen_buildings.add(sig)
+                        pending_reports.append(it)
                 conn.commit()
             logging.debug(f"Auto-learned {len(items)} building(s) from page.")
         except Exception as e:
             logging.warning(f"Auto-learn DB step failed: {e}")
+            return
 
-    def _infer_col_row_from_dom(self, el) -> tuple[str | None, str | None]:
+        # Only share once the local write succeeded; batched + off-thread.
+        if pending_reports:
+            self._flush_reports(pending_reports)
+
+    def _building_game_coord(self, el) -> tuple[int | None, int | None]:
+        """Return the RBC game (x, y) of the cell a building span sits in.
+
+        A cell you can move to carries a hidden ``move`` form with its x/y; the
+        cell you are standing in has none, so it resolves to the already-parsed
+        character position (``character_x``/``character_y`` + 1 reaches the cell
+        centre - the same convention the minimap uses).
         """
-        Read a nearby 'Column & Row' label like 'Kraken & 45th' or 'Ivy & NCL'
-        without touching minimap math.
+        td = el
+        while td is not None and getattr(td, "name", None) != "td":
+            td = td.parent
+        if td is not None:
+            xi = td.find("input", {"name": "x"})
+            yi = td.find("input", {"name": "y"})
+
+            def _as_int(node):
+                v = node.get("value") if node is not None else None
+                return int(v) if v is not None and str(v).lstrip("-").isdigit() else None
+
+            gx, gy = _as_int(xi), _as_int(yi)
+            if gx is not None and gy is not None:
+                return gx, gy
+        # No move form -> the player's current cell.
+        if self.character_x is not None and self.character_y is not None:
+            return self.character_x + 1, self.character_y + 1
+        return None, None
+
+    # Some kinds render a generic on-map label; map it to the canonical DB name.
+    _BUILDING_NAME_OVERRIDES = {"bank": "OmniBank"}
+
+    def _building_display_name(self, cls: str, el) -> str:
+        """Canonical building name: a fixed override for generic labels
+        (e.g. bank shows ``$ BANK $`` but is stored as ``OmniBank``), otherwise
+        the span's own text/title, normalized."""
+        override = self._BUILDING_NAME_OVERRIDES.get(cls)
+        if override:
+            return override
+        raw = el.get_text(" ", strip=True) or (el.get("title") or "")
+        return self.normalize_building_name(raw)
+
+    # Special Places of Interest that are curated locally, not crowdsourced.
+    _CURATED_POI_NAME_MARKERS = ("kindred hospital", "cloister of secrets", "requiem of hades")
+
+    def _is_curated_poi(self, cls: str, name: str, el) -> bool:
+        """True for special POI that must stay curated in placesofinterest.
+
+        Battle Arena / Graveyard / Eternal Aubade already route to
+        placesofinterest via their span class, so they are fine. The two that
+        would otherwise leak are Cloister of Secrets (a fixed ``<!--nomove-->``
+        shop) and Kindred Hospital (a lair) - skip those by marker/name so they
+        are not learned into the shops/userbuildings tables or reported.
         """
-        node = el
-        blob = ""
-        tries = 0
-        while getattr(node, "parent", None) is not None and tries < 5:
+        low = (name or "").lower()
+        if any(marker in low for marker in self._CURATED_POI_NAME_MARKERS):
+            return True
+        # Any fixed (non-moving) shop is a curated location, not a mover shop.
+        if cls == "shop":
             try:
-                title = node.get("title") or ""
-                text = node.get_text(" ", strip=True) if hasattr(node, "get_text") else ""
-                if title or text:
-                    blob += " " + title + " " + text
+                if "nomove" in str(el).lower():
+                    return True
             except Exception:
                 pass
-            node = node.parent
-            tries += 1
-
-        m = re.search(r"([A-Z][A-Za-z\- ]+)\s*[,&]\s*(\d{1,3}(?:st|nd|rd|th)|NCL|WCL)", blob)
-        if m:
-            return m.group(1).strip(), m.group(2).strip()
-        return None, None
+        return False
 
     def normalize_building_name(self, s: str) -> str:
         s = (s or "").strip()
@@ -2538,9 +2956,23 @@ class RBCCommunityMap(QMainWindow):
                 pass
         return s
 
-    def _upsert_building(self, cur: sqlite3.Cursor, cls: str, name: str, col: str, row: str) -> bool:
-        """
-        Returns True if a brand‑new record was inserted (useful for reporting hooks).
+    def _upsert_building(self, cur: sqlite3.Cursor, cls: str, name: str, col: str, row: str) -> str | None:
+        """Insert or update a learned building; return the action taken.
+
+        Returns:
+            "inserted" - a new row was created.
+            "updated"  - an existing mover's coordinates changed.
+            None       - nothing changed.
+
+        Fixtures (banks/taverns/transits/places-of-interest/lairs) are keyed by
+        ``(name, column, row)`` and only ever inserted; they do not move. Movers
+        (shops/guilds) are keyed by ``name`` and have their coordinates corrected
+        whenever the observed location differs from what is stored - this both
+        fills a hidden (``NA``) entry and follows a relocation to a new corner.
+
+        The non-``None`` actions are what drive crowdsourced reporting
+        (:meth:`_flush_reports`), so this is the single place that decides
+        "something worth sharing changed."
         """
         mapping = BUILDING_CLASS_MAP[cls]
         table = mapping["table"]
@@ -2549,53 +2981,79 @@ class RBCCommunityMap(QMainWindow):
         if table in ("banks", "taverns", "transits", "placesofinterest", "userbuildings"):
             cur.execute(f"SELECT 1 FROM {table} WHERE `Column`=? AND Row=? AND {name_col}=?", (col, row, name))
             if cur.fetchone():
-                return False
+                return None
             cur.execute(
                 f"INSERT INTO {table} (`Column`, Row, {name_col}) VALUES (?, ?, ?)",
                 (col, row, name)
             )
             logging.debug(f"Inserted {table}: {name} @ {col} & {row}")
-            return True
+            return "inserted"
 
-        if table == "shops":
-            cur.execute("SELECT `Column`, Row FROM shops WHERE Name=?", (name,))
+        if table in ("shops", "guilds"):
+            singular = table[:-1]
+            cur.execute(f"SELECT `Column`, Row FROM {table} WHERE Name=?", (name,))
             row0 = cur.fetchone()
-            if row0:
-                existing_col, existing_row = row0
-                if (existing_col in (None, "", "NA")) or (existing_row in (None, "", "NA")):
-                    cur.execute("UPDATE shops SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
-                    logging.debug(f"Updated shop coords: {name} -> {col} & {row}")
-                return False
-            cur.execute("INSERT INTO shops (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
-            logging.debug(f"Inserted shop: {name} @ {col} & {row}")
-            return True
+            if row0 is None:
+                cur.execute(f"INSERT INTO {table} (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
+                logging.debug(f"Inserted {singular}: {name} @ {col} & {row}")
+                return "inserted"
+            existing_col, existing_row = row0
+            if (existing_col, existing_row) != (col, row):
+                cur.execute(f"UPDATE {table} SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
+                logging.debug(f"Updated {singular} coords: {name} -> {col} & {row}")
+                return "updated"
+            return None
 
-        if table == "guilds":
-            cur.execute("SELECT `Column`, Row FROM guilds WHERE Name=?", (name,))
-            row0 = cur.fetchone()
-            if row0:
-                existing_col, existing_row = row0
-                if (existing_col in (None, "", "NA")) or (existing_row in (None, "", "NA")):
-                    cur.execute("UPDATE guilds SET `Column`=?, Row=? WHERE Name=?", (col, row, name))
-                    logging.debug(f"Updated guild coords: {name} -> {col} & {row}")
-                return False
-            cur.execute("INSERT INTO guilds (Name, `Column`, Row) VALUES (?, ?, ?)", (name, col, row))
-            logging.debug(f"Inserted guild: {name} @ {col} & {row}")
-            return True
-
-        return False
+        return None
 
     def _report_discovered_location(self, cls: str, name: str, col: str, row: str) -> None:
+        """Report a single discovered location (convenience wrapper)."""
+        self._flush_reports([{"cls": cls, "name": name, "col": col, "row": row}])
+
+    def _flush_reports(self, reports: list[dict]) -> None:
+        """Share discovered locations with the bot: off-thread, best-effort.
+
+        Gated by the user's opt-in (``self.location_reporting_enabled``); when
+        off, nothing leaves the machine. One POST carries the whole batch from a
+        page load. The request runs on a daemon thread so a slow or unreachable
+        endpoint never stalls page processing, and any failure is logged (not
+        raised) - the location will simply be re-sent the next time it is seen.
+
+        Only building kind/name/coordinates and an anonymous ``client_id`` are
+        sent - never character, position, or coins. See
+        docs/crowdsourced-location-reporting.md.
         """
-        Placeholder for your Discord/AVITD reporting (only called on brand‑new shops/guilds).
-        Safe to leave as no‑op until your API endpoint exists.
-        """
-        # Example (when ready):
-        # try:
-        #     requests.post(BOT_URL, json={"kind": cls, "name": name, "col": col, "row": row}, timeout=3)
-        # except Exception as e:
-        #     logging.info(f"Report skipped: {e}")
-        pass
+        if not reports or not self.location_reporting_enabled:
+            return
+
+        observed_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        payload = {
+            "reports": [
+                {
+                    "kind": r["cls"],
+                    "name": r["name"],
+                    "column": r["col"],
+                    "row": r["row"],
+                    "observed_at": observed_at,
+                    "client_id": self.client_id,
+                    "credit": self.report_credit,
+                    "app_version": VERSION_NUMBER,
+                }
+                for r in reports
+            ]
+        }
+
+        def _send() -> None:
+            try:
+                resp = requests.post(REPORT_LOCATION_URL, json=payload, timeout=REPORT_TIMEOUT)
+                logging.debug(
+                    "Reported %d location(s); server responded %s",
+                    len(payload["reports"]), resp.status_code,
+                )
+            except requests.RequestException as e:
+                logging.info("Location report skipped (will retry on next sighting): %s", e)
+
+        threading.Thread(target=_send, name="location-report", daemon=True).start()
 
     # -----------------------
     # Minimap Drawing and Update
@@ -2608,7 +3066,10 @@ class RBCCommunityMap(QMainWindow):
         """
         pixmap = PySide6.QtGui.QPixmap(self.minimap_size, self.minimap_size)
         painter = PySide6.QtGui.QPainter(pixmap)
-        painter.fillRect(0, 0, self.minimap_size, self.minimap_size, PySide6.QtGui.QColor('lightgrey'))
+        painter.fillRect(
+            0, 0, self.minimap_size, self.minimap_size,
+            getattr(self, "minimap_background_color", PySide6.QtGui.QColor("#000000")),
+        )
 
         block_size = self.minimap_size // self.zoom_level
         font_size = max(8, block_size // 4)  # Dynamically adjust font size, with a minimum of 5
@@ -2645,11 +3106,54 @@ class RBCCommunityMap(QMainWindow):
 
                 painter.drawLine(cx1, cy1, cx2, cy2)
 
-        def draw_label_box(x, y, width, base_height, bg_color, text):
+        icon_for_style = {
+            "bank": "bank", "tavern": "tavern", "transit": "transit",
+            "user_building": "user_building", "shop": "shop", "guild": "guild",
+            "arena": "arena", "grave": "graveyard", "alchemy": "alchemy",
+            "bind": "hall_binding", "sever": "hall_severance",
+            "placesofinterest": "placesofinterest",
+        }
+
+        def draw_label_box(x, y, width, base_height, bg_color, text, style_key=None):
             """
-            Draws a text label box with a background color, white border, and properly formatted text.
-            Allows wrapped text to grow to 2 lines in zoom 5 and 7.
+            Draws a building marker: the building icon filling the cell with the
+            name as a caption strip when an icon exists for ``style_key``;
+            otherwise (intersections, or a missing icon) the classic colored box.
             """
+            icon_key = icon_for_style.get(style_key)
+            pixmap = self.map_icons.get(icon_key) if icon_key else None
+            if pixmap is not None and not pixmap.isNull():
+                # Caption uses a small font and wraps long names onto up to two
+                # lines; the icon shrinks to give the caption whatever height it
+                # needs (never more than half the cell).
+                cfont = painter.font()
+                cfont.setPointSize(max(4, min(8, width // 8)))
+                painter.setFont(cfont)
+                fm = PySide6.QtGui.QFontMetrics(cfont)
+                line_h = fm.height()
+                wrapped = fm.boundingRect(
+                    QRect(0, 0, max(1, width - 4), line_h * 2 + 2),
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                    text,
+                )
+                max_cap = max(line_h + 3, block_size // 2)
+                cap_h = max(line_h + 3, min(wrapped.height() + 4, line_h * 2 + 4, max_cap))
+                icon_area = max(1, block_size - cap_h)
+                scaled = pixmap.scaled(
+                    width, icon_area,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                painter.drawPixmap(x + (width - scaled.width()) // 2, y, scaled)
+                cap_y = y + block_size - cap_h
+                painter.fillRect(QRect(x, cap_y, width, cap_h), bg_color)
+                painter.setPen(self.minimap_border_colors.get(style_key, PySide6.QtGui.QColor('white')))
+                painter.drawRect(QRect(x, cap_y, width, cap_h))
+                painter.setPen(self.minimap_text_colors.get(style_key, PySide6.QtGui.QColor('white')))
+                painter.drawText(QRect(x + 1, cap_y + 1, max(1, width - 2), cap_h - 2),
+                                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap,
+                                 text)
+                return
             # Set font based on zoom level
             font = painter.font()
             if self.zoom_level == 3:
@@ -2677,13 +3181,13 @@ class RBCCommunityMap(QMainWindow):
             # Draw background
             painter.fillRect(QRect(x, y, width, label_height), bg_color)
 
-            # Draw white border
-            painter.setPen(PySide6.QtGui.QColor('white'))
+            # Match the corresponding game CSS label colors where available.
+            painter.setPen(self.minimap_border_colors.get(style_key, PySide6.QtGui.QColor('white')))
             painter.drawRect(QRect(x, y, width, label_height))
 
             # Draw text
             text_rect = QRect(x, y, width, label_height)
-            painter.setPen(PySide6.QtGui.QColor('white'))
+            painter.setPen(self.minimap_text_colors.get(style_key, PySide6.QtGui.QColor('white')))
 
             if self.zoom_level >= 5:
                 painter.drawText(
@@ -2732,7 +3236,7 @@ class RBCCommunityMap(QMainWindow):
                 if column_name and row_name:
                     label_text = f"{column_name} & {row_name}"
                     label_height = block_size // 3  # Set label height
-                    draw_label_box(x0 + 2, y0 + 2, block_size - 4, label_height, self.color_mappings["intersect"], label_text)
+                    draw_label_box(x0 + 2, y0 + 2, block_size - 4, label_height, self.color_mappings["intersect"], label_text, "intersect")
 
         # Draw special locations (banks with correct offsets)
         for bank_key in self.banks_coordinates.keys():
@@ -2759,7 +3263,7 @@ class RBCCommunityMap(QMainWindow):
                     draw_label_box(
                         (adjusted_column_index - self.column_start) * block_size,
                         (adjusted_row_index - self.row_start) * block_size,
-                        block_size, label_height, self.color_mappings["bank"], "BANK"
+                        block_size, label_height, self.color_mappings["bank"], "BANK", "bank"
                     )
                 else:
                     logging.warning(f"Skipping bank at {col_name} & {row_name} due to missing coordinates")
@@ -2781,7 +3285,7 @@ class RBCCommunityMap(QMainWindow):
                 draw_label_box(
                     (column_index - self.column_start) * block_size,
                     (row_index - self.row_start) * block_size,
-                    block_size, label_height, self.color_mappings["tavern"], name
+                    block_size, label_height, self.color_mappings["tavern"], name, "tavern"
                 )
 
         for name, (column_index, row_index) in self.transits_coordinates.items():
@@ -2798,7 +3302,7 @@ class RBCCommunityMap(QMainWindow):
                 draw_label_box(
                     (column_index - self.column_start) * block_size,
                     (row_index - self.row_start) * block_size,
-                    block_size, label_height, self.color_mappings["transit"], name
+                    block_size, label_height, self.color_mappings["transit"], name, "transit"
                 )
 
         for name, (column_index, row_index) in self.user_buildings_coordinates.items():
@@ -2815,7 +3319,7 @@ class RBCCommunityMap(QMainWindow):
                 draw_label_box(
                     (column_index - self.column_start) * block_size,
                     (row_index - self.row_start) * block_size,
-                    block_size, label_height, self.color_mappings["user_building"], name
+                    block_size, label_height, self.color_mappings["user_building"], name, "user_building"
                 )
 
         for name, (column_index, row_index) in self.shops_coordinates.items():
@@ -2832,7 +3336,7 @@ class RBCCommunityMap(QMainWindow):
                 draw_label_box(
                     (column_index - self.column_start) * block_size,
                     (row_index - self.row_start) * block_size,
-                    block_size, label_height, self.color_mappings["shop"], name
+                    block_size, label_height, self.color_mappings["shop"], name, "shop"
                 )
 
         for name, (column_index, row_index) in self.guilds_coordinates.items():
@@ -2849,15 +3353,13 @@ class RBCCommunityMap(QMainWindow):
                 draw_label_box(
                     (column_index - self.column_start) * block_size,
                     (row_index - self.row_start) * block_size,
-                    block_size, label_height, self.color_mappings["guild"], name
+                    block_size, label_height, self.color_mappings["guild"], name, "guild"
                 )
 
         for name, (column_index, row_index) in self.places_of_interest_coordinates.items():
             if column_index is not None and row_index is not None:
-                if name.lower() == "graveyard":
-                    color = self.color_mappings.get("graveyard", self.color_mappings["placesofinterest"])
-                else:
-                    color = self.color_mappings["placesofinterest"]
+                style_key = self._poi_style_key(name)
+                color = self.color_mappings.get(style_key, self.color_mappings["placesofinterest"])
 
                 logging.debug(f"Drawing {name} with color {color.name()}")
 
@@ -2874,7 +3376,7 @@ class RBCCommunityMap(QMainWindow):
                 draw_label_box(
                     (column_index - self.column_start) * block_size,
                     (row_index - self.row_start) * block_size,
-                    block_size, label_height, color, name
+                    block_size, label_height, color, name, style_key
                 )
 
             # Get current location
@@ -3744,9 +4246,21 @@ class RBCCommunityMap(QMainWindow):
             # Runs on the UI thread, so cap both the legacy blind wait and the
             # v2 poll budget to ~5s; a slow scrape must not freeze the window
             # (the startup path runs on a worker and uses the full budget).
-            data = fetch_location_update(sleep_seconds=5, poll_max_seconds=5)
+            data = fetch_location_update(
+                sleep_seconds=5,
+                poll_max_seconds=5,
+                known_timestamp=self.get_locations_last_updated(),
+            )
 
-            self.update_database_with_json(data)
+            if data is not None:
+                self.update_database_with_json(data)
+            else:
+                logging.info("Update Data: local data already current; nothing to update")
+
+            # Crowdsourced non-mover buildings are independent of the locations
+            # cooldown, so always pull them; then refresh the map in one pass.
+            self.fetch_and_merge_community_buildings(timeout=5)
+            self.refresh_map_data_from_db()
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Update error: {e}")
@@ -3754,6 +4268,280 @@ class RBCCommunityMap(QMainWindow):
         except Exception as e:
             logging.error(f"Unexpected error during update: {e}")
             QMessageBox.critical(self, "Error", str(e))
+
+    def get_locations_last_updated(self) -> str | None:
+        """Return the server ``last_updated`` value stored at our last write.
+
+        This is the authoritative "which generation of bot data do we hold"
+        marker (the server's own timestamp, not our local write time), used to
+        decide whether a /refresh "cooldown" response is actually newer than
+        what we already have. Returns ``None`` if we have never stored one.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.cursor().execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'locations_last_updated'"
+                ).fetchone()
+                return row[0] if row and row[0] else None
+        except Exception as e:
+            logging.warning(f"Could not read stored locations timestamp: {e}")
+            return None
+
+    def fetch_and_merge_community_buildings(self, timeout: int = HTTP_REQUEST_TIMEOUT) -> int:
+        """Pull crowdsourced non-mover buildings and merge them into the DB.
+
+        Fetches ``community_buildings.json`` (banks, taverns, transits,
+        places-of-interest, lairs that other players reported) and inserts any
+        new ones into the local building tables via :meth:`_upsert_building`
+        (insert-if-absent by name/column/row). Guild/shop kinds are ignored here
+        — those arrive through ``locations.json``.
+
+        Network + DB only, so it is safe to call off the UI thread. Returns the
+        number of newly inserted buildings; the caller redraws the map when >0.
+        """
+        data = None
+        for url in (UPDATE_COMMUNITY_URL, UPDATE_SEED_URL):
+            try:
+                resp = requests.get(url, timeout=timeout)
+                resp.raise_for_status()
+                candidate = resp.json()
+                if isinstance(candidate, dict) and candidate:
+                    data = candidate
+                    break
+                logging.info("Building source empty: %s", url)
+            except (requests.RequestException, ValueError) as e:
+                logging.info("Building source fetch skipped (%s): %s", url, e)
+
+        if not isinstance(data, dict) or not data:
+            return 0
+
+        inserted = 0
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                for entry in data.values():
+                    if not isinstance(entry, dict):
+                        continue
+                    kind = entry.get("kind")
+                    name = (entry.get("name") or "").strip()
+                    col = (entry.get("column") or "").strip()
+                    row = (entry.get("row") or "").strip()
+                    if kind not in BUILDING_CLASS_MAP or not name or not col or not row:
+                        continue
+                    # Movers come via locations.json; skip if any slip in here.
+                    if BUILDING_CLASS_MAP[kind]["table"] in ("shops", "guilds"):
+                        continue
+                    if self._upsert_building(cur, kind, name, col, row) == "inserted":
+                        inserted += 1
+                conn.commit()
+        except Exception as e:
+            logging.warning(f"Community buildings merge failed: {e}")
+            return 0
+
+        if inserted:
+            logging.info("Merged %d crowdsourced building(s) from community data", inserted)
+        return inserted
+
+    def refresh_map_data_from_db(self) -> None:
+        """Reload building/coordinate mappings from the DB and redraw the map.
+
+        Run on the UI thread after an update writes new rows (locations and/or
+        community buildings). Reuses :func:`load_data` but discards its session
+        fields (keybind/CSS/character/destination) so an in-session refresh does
+        not disturb the active character or destination.
+        """
+        try:
+            (
+                self.columns,
+                self.rows,
+                self.banks_coordinates,
+                self.taverns_coordinates,
+                self.transits_coordinates,
+                self.user_buildings_coordinates,
+                self.color_mappings,
+                self.shops_coordinates,
+                self.guilds_coordinates,
+                self.places_of_interest_coordinates,
+                _kb, _css, _sel, _dest,
+            ) = load_data()
+            # load_data restores the DB palette; reapply the active game CSS
+            # overlay so a refresh cannot revert the minimap to defaults.
+            self.apply_minimap_colors_from_css()
+        except sqlite3.Error as e:
+            logging.warning(f"Could not reload map data from DB: {e}")
+            return
+        try:
+            if self.character_x is not None and self.character_y is not None:
+                self.update_minimap()
+        except Exception as e:
+            logging.debug(f"Minimap redraw after refresh skipped: {e}")
+
+    # -----------------------
+    # Crowdsourced reporting preferences
+    # -----------------------
+
+    def load_location_reporting_setting(self) -> None:
+        """Read the reporting opt-in on startup; default ON when never set.
+
+        Sets ``self.location_reporting_enabled`` and records whether the
+        preference row was absent (``self._reporting_pref_was_unset``) so the
+        caller can decide to ask the user once on first run.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.cursor().execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'locations_reporting_enabled'"
+                ).fetchone()
+            if row is None or row[0] is None:
+                self._reporting_pref_was_unset = True
+                self.location_reporting_enabled = True  # provisional until the user chooses
+            else:
+                self._reporting_pref_was_unset = False
+                self.location_reporting_enabled = bool(int(row[0]))
+        except (sqlite3.Error, ValueError, TypeError) as e:
+            logging.warning(f"Could not read reporting preference; defaulting ON: {e}")
+            self._reporting_pref_was_unset = False
+            self.location_reporting_enabled = True
+
+    def toggle_location_reporting(self, enabled: bool) -> None:
+        """Enable/disable sharing discovered locations with the bot; persist it.
+
+        Mirrors :meth:`toggle_keybind_config`: update in-memory state and write
+        the choice to the ``settings`` table so it survives restarts. Takes
+        effect immediately (checked by the reporter before every send).
+        """
+        self.location_reporting_enabled = bool(enabled)
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.cursor().execute(
+                    """
+                    INSERT INTO settings (setting_name, setting_value)
+                    VALUES ('locations_reporting_enabled', ?)
+                    ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                    """,
+                    (1 if enabled else 0,),
+                )
+                conn.commit()
+            logging.info("Location reporting %s", "enabled" if enabled else "disabled")
+        except sqlite3.Error as e:
+            logging.error(f"Failed to save reporting preference: {e}")
+
+    def prompt_first_run_reporting_choice(self) -> None:
+        """First-run setup for crowdsourced sharing - asked exactly once.
+
+        Only invoked when no preference row exists yet (see
+        :meth:`load_location_reporting_setting`); the choice is persisted
+        immediately, so this never asks again. Asks two things: whether to
+        contribute, and (if so) what name to credit contributions to (blank =
+        Anonymous). Closing the first dialog takes the privacy-preserving path
+        (No / do not share).
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Contribute Discovered Locations?")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText("Help keep the community map current?")
+        box.setInformativeText(
+            "As you explore, this app can share the guild, shop, and building "
+            "locations you walk past with the map's update bot, so everyone's "
+            "map stays current between reveal cycles.\n\n"
+            "Only building names and coordinates are ever sent — never your "
+            "character, position, or coins. You can change this anytime under "
+            "Settings → “Contribute Discovered Locations”."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        enabled = box.exec() == QMessageBox.StandardButton.Yes
+
+        # Ask who to credit (only worth asking if they're contributing).
+        if enabled:
+            name, ok = QInputDialog.getText(
+                self,
+                "Contribution Credit",
+                "Name to credit your contributions to\n(leave blank for Anonymous):",
+            )
+            self.set_report_credit(name.strip() if (ok and name and name.strip()) else "Anonymous")
+
+        self.toggle_location_reporting(enabled)
+        self._reporting_pref_was_unset = False
+        # Sync the menu check without re-triggering the persist handler.
+        if hasattr(self, "reporting_action") and self.reporting_action is not None:
+            self.reporting_action.blockSignals(True)
+            self.reporting_action.setChecked(enabled)
+            self.reporting_action.blockSignals(False)
+
+    def _load_report_credit(self) -> str:
+        """Read the contribution credit name; default 'Anonymous' when unset."""
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.cursor().execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'report_credit'"
+                ).fetchone()
+            if row and row[0] and str(row[0]).strip():
+                return str(row[0]).strip()
+        except sqlite3.Error as e:
+            logging.warning(f"Could not read report credit; using Anonymous: {e}")
+        return "Anonymous"
+
+    def set_report_credit(self, name: str) -> None:
+        """Persist the contribution credit name (blank -> Anonymous)."""
+        credit = (name or "").strip() or "Anonymous"
+        self.report_credit = credit
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.cursor().execute(
+                    """
+                    INSERT INTO settings (setting_name, setting_value)
+                    VALUES ('report_credit', ?)
+                    ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                    """,
+                    (credit,),
+                )
+                conn.commit()
+            logging.info("Contribution credit set to %r", credit)
+        except sqlite3.Error as e:
+            logging.error(f"Failed to save report credit: {e}")
+
+    def prompt_report_credit(self) -> None:
+        """Settings-menu action to view/change the contribution credit name."""
+        current = self.report_credit if self.report_credit != "Anonymous" else ""
+        name, ok = QInputDialog.getText(
+            self,
+            "Contribution Credit",
+            "Name to credit your contributions to\n(leave blank for Anonymous):",
+            text=current,
+        )
+        if ok:
+            self.set_report_credit(name)
+
+    def _get_or_create_client_id(self) -> str:
+        """Return this install's anonymous reporting id, creating one if needed.
+
+        A random UUID stored in ``settings``; it identifies the install for
+        server-side rate limiting/dedupe only. It is never tied to the user's
+        email, character, or any personal data.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.cursor()
+                row = cur.execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'client_id'"
+                ).fetchone()
+                if row and row[0]:
+                    return str(row[0])
+                new_id = uuid.uuid4().hex
+                cur.execute(
+                    """
+                    INSERT INTO settings (setting_name, setting_value)
+                    VALUES ('client_id', ?)
+                    ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                    """,
+                    (new_id,),
+                )
+                conn.commit()
+                return new_id
+        except sqlite3.Error as e:
+            logging.warning(f"Could not persist client_id; using ephemeral id: {e}")
+            return uuid.uuid4().hex
 
     def update_database_with_json(self, data):
         """
@@ -3767,6 +4555,7 @@ class RBCCommunityMap(QMainWindow):
                 scrape_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                 guilds_next = data.get("guilds_next_update")
                 shops_next = data.get("shops_next_update")
+                server_last_updated = data.get("last_updated")
 
                 # Clear old locations except Peacekeepers
                 cursor.execute("""
@@ -3802,6 +4591,35 @@ class RBCCommunityMap(QMainWindow):
                         VALUES (?, ?, ?, ?, ?)""",
                                    (name, col, row, shops_next, scrape_timestamp)
                                    )
+
+                # All building locations, including curated POIs, are
+                # server-owned in 0.14. Reconcile the complete snapshot.
+                server_buildings = data.get("buildings", {})
+                if isinstance(server_buildings, dict):
+                    for table in ("banks", "taverns", "transits", "userbuildings", "placesofinterest"):
+                        cursor.execute(f"DELETE FROM {table}")
+                    for entry in server_buildings.values():
+                        if not isinstance(entry, dict):
+                            continue
+                        kind = entry.get("kind")
+                        name = str(entry.get("name") or "").strip()
+                        col = str(entry.get("column") or "").strip()
+                        row = str(entry.get("row") or "").strip()
+                        if kind in BUILDING_CLASS_MAP and name and col and row:
+                            self._upsert_building(cursor, kind, name, col, row)
+
+                # Record the server's own data timestamp so later /refresh
+                # "cooldown" responses can be compared against what we hold
+                # (see get_locations_last_updated / fetch_location_update).
+                if server_last_updated:
+                    cursor.execute(
+                        """
+                        INSERT INTO settings (setting_name, setting_value)
+                        VALUES ('locations_last_updated', ?)
+                        ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                        """,
+                        (server_last_updated,),
+                    )
 
                 conn.commit()
                 logging.info(f"Database updated with {len(data.get('guilds', {}))} guilds and {len(data.get('shops', {}))} shops.")

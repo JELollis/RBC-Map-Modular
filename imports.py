@@ -11,6 +11,7 @@ monolithic ``main_0.13.3.0.py`` build.
 # Standard Library
 # -----------------------
 
+import json
 import logging
 import logging.handlers
 import math
@@ -19,7 +20,9 @@ import platform
 import re
 import sqlite3
 import sys
+import threading
 import time
+import uuid
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

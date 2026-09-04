@@ -284,6 +284,11 @@ class CSSCustomizationDialog(QDialog):
                 parent = cast("MainWindowType", self.parent)
                 parent.current_css_profile = self.current_profile
                 parent.apply_custom_css(css)
+                # Keep the native minimap synchronized with the CSS profile
+                # just written, not only with the profile loaded at startup.
+                parent.apply_minimap_colors_from_css()
+                if parent.character_x is not None and parent.character_y is not None:
+                    parent.update_minimap()
                 parent.website_frame.reload()
 
             self.accept()

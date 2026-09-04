@@ -14,6 +14,9 @@ class ThemeCustomizationDialog(QDialog):
         self.setMinimumSize(400, 300)
 
         self.color_mappings = color_mappings.copy() if color_mappings else {}
+        # Track which elements the user actually changes, so change_theme can
+        # record only those as overrides (highest precedence over CSS/defaults).
+        self.changed_minimap_elements: set[str] = set()
 
         # Main layout
         layout = QVBoxLayout(self)
@@ -91,6 +94,7 @@ class ThemeCustomizationDialog(QDialog):
         color = QColorDialog.getColor(self.color_mappings.get(element_name, PySide6.QtGui.QColor('white')), self)
         if color.isValid():
             self.color_mappings[element_name] = color
+            self.changed_minimap_elements.add(element_name)
             pixmap = PySide6.QtGui.QPixmap(20, 20)
             pixmap.fill(color)
             color_square.setPixmap(pixmap)
