@@ -166,7 +166,11 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             ('css_profile', 'Default'),
             ('log_level', str(DEFAULT_LOG_LEVEL))
         ]),
-        ("REPLACE INTO color_mappings (id, type, color) VALUES (?, ?, ?)", [
+        # INSERT OR IGNORE (not REPLACE): user theme edits are upserted into this
+        # table by save_theme_settings, and this seed runs on every startup, so
+        # REPLACE would reset the user's colors to defaults each launch. Seed only
+        # the rows a fresh DB is missing.
+        ("INSERT OR IGNORE INTO color_mappings (id, type, color) VALUES (?, ?, ?)", [
             (1, 'bank', '#0000ff'),
             (2, 'tavern', '#887700'),
             (3, 'transit', '#880000'),
