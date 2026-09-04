@@ -12,6 +12,8 @@ live test, and a served schema for non-mover building kinds (see "Known limitati
 | Learner emits insert/coord-change for all kinds; batched off-thread POST | `rbc_community_map.py` (`_upsert_building`, `_flush_reports`) | ✅ |
 | `POST /api/report-location` (validate + inbox + cooldown-gated trigger) | `Discord-Scraper/api/wsgi/wsgi_handler.py` | ✅ |
 | Bot drains inbox + merges guild/shop; retains other kinds | `Discord-Scraper/rbc-discord-scraper.py` (`merge_reports_inbox`) | ✅ |
+| Serve `community_buildings.json` (non-movers) | `Discord-Scraper/api/wsgi/wsgi_handler.py` | ✅ |
+| Client pulls community buildings + merges into local tables + redraws | `rbc_community_map.py` (`fetch_and_merge_community_buildings`, `refresh_map_data_from_db`) | ✅ |
 
 ### Deployment / config notes
 
@@ -30,10 +32,13 @@ live test, and a served schema for non-mover building kinds (see "Known limitati
 
 ### Known limitations (v1)
 
-- `locations.json` still carries only **guilds/shops**, so only those reports reach other
-  clients. Reports for banks/taverns/transits/arenas/graves/lairs/alchemy are **validated and
-  retained** in `community_buildings.json` (deduped) but **not yet redistributed** — serving
-  them is a follow-up (open question §7). Nothing is dropped.
+- **(Resolved 2026-09-01)** Non-mover kinds (banks/taverns/transits/arenas/graves/lairs/
+  alchemy) are now **served** at `GET /api/community_buildings.json` and **pulled down** by the
+  client (`fetch_and_merge_community_buildings`), which inserts new ones into the local building
+  tables (insert-if-absent by name/column/row) and redraws the map (`refresh_map_data_from_db`)
+  on both the startup and manual-update paths. `locations.json` still carries the **movers**
+  (guilds/shops); the two data sets are fetched together. Verified end-to-end on the live
+  server (bank+pub report → `community_buildings.json` → served → client merge).
 - Movers now update locally on any observed coordinate difference; a bad DOM parse could
   overwrite a good local coord. `_infer_col_row_from_dom` + server-side row validation gate
   this, but there is no multi-client quorum yet (v2, §6).
