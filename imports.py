@@ -19,6 +19,7 @@ import os
 import platform
 import re
 import sqlite3
+import shutil
 import sys
 import threading
 import time

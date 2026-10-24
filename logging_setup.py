@@ -84,6 +84,8 @@ if not setup_logging(log_level=get_logging_level_from_db()):
     )
 
 logging.info("Launching app version %s", VERSION_NUMBER)
+if LEGACY_MIGRATION_RESULT:
+    logging.log(*LEGACY_MIGRATION_RESULT)
 
 
 def save_logging_level_to_db(level: int) -> bool:

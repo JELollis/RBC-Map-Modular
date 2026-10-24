@@ -5,18 +5,66 @@ from splash import *
 # Global Constants
 # -----------------------
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent  # install dir: bundled assets, may be read-only
 
-LOG_DIR = BASE_DIR / "logs"
-SESSIONS_DIR = BASE_DIR / "sessions"
-IMAGES_DIR = BASE_DIR / "images"
+
+def _user_data_dir() -> Path:
+    """Per-user, always-writable location for the database, cookies and logs.
+
+    Keeping writable data out of the install folder means a bad launch directory
+    (e.g. cwd = C:\\Windows\\System32) or changed folder permissions can't break
+    character/cookie persistence.
+    """
+    if sys.platform.startswith("win"):
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    if base:
+        return Path(base) / "RBC-Map"
+    return BASE_DIR  # last-resort fallback: alongside the script (legacy behavior)
+
+
+DATA_DIR = _user_data_dir()
+
+LOG_DIR = DATA_DIR / "logs"
+SESSIONS_DIR = DATA_DIR / "sessions"
+IMAGES_DIR = BASE_DIR / "images"  # bundled asset, read next to the script
 
 DB_PATH = SESSIONS_DIR / "rbc_map_data.db"
+
+
+def migrate_legacy_sessions(legacy_dir: Path, new_dir: Path) -> tuple[int, str] | None:
+    """One-time copy of the old script-relative sessions folder into the per-user one.
+
+    Earlier builds kept the database and the Qt cookie store next to the script.
+    The whole folder is copied so characters, settings and logins carry forward.
+    Runs before anything opens the database, because sqlite3.connect() creates an
+    empty file that would otherwise make the new location look already populated.
+    Returns a (log level, message) pair to log once logging is set up, or None.
+    """
+    legacy_db = legacy_dir / "rbc_map_data.db"
+    new_db = new_dir / "rbc_map_data.db"
+    try:
+        if legacy_dir.resolve() == new_dir.resolve():
+            return None
+        if not legacy_db.is_file() or legacy_db.stat().st_size == 0:
+            return None
+        if new_db.is_file() and new_db.stat().st_size > 0:
+            return None  # already migrated, or the new location is in use
+        shutil.copytree(legacy_dir, new_dir, dirs_exist_ok=True)
+        return logging.INFO, f"Migrated legacy session data {legacy_dir} -> {new_dir}"
+    except Exception as exc:
+        return logging.WARNING, f"Legacy session data migration skipped: {exc}"
+
+
+LEGACY_MIGRATION_RESULT = migrate_legacy_sessions(BASE_DIR / "sessions", SESSIONS_DIR)
+
 
 REQUIRED_DIRECTORIES = [
     LOG_DIR,
     SESSIONS_DIR,
-    IMAGES_DIR,
 ]
 
 VERSION_NUMBER = "0.13.3.0"
