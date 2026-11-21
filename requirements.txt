@@ -1,0 +1,10 @@
+# Runtime dependencies for the RBC Community Map application.
+# Kept in sync with the `required_modules` validation map in the main script.
+#
+# Note: PySide6 bundles the Qt WebEngine modules (QtWebEngineWidgets,
+# QtWebEngineCore, QtWebChannel) used by the embedded browser view, so no
+# separate WebEngine package is required from PyPI.
+
+PySide6
+beautifulsoup4
+requests
