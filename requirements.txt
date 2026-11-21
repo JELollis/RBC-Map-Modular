@@ -1,0 +1,4 @@
+# Runtime dependencies for RBC Community Map 0.3.0.
+# Generated from the imports in main_0.3.0.py.
+
+PyQt5
