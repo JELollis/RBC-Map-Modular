@@ -1,0 +1,6 @@
+# Repository-wide ownership. Pull requests touching the project require
+# review from the repository owner under the active ruleset.
+* @JELollis
+
+# Keep deployment and validation workflow changes explicitly owner-reviewed.
+/.github/workflows/ @JELollis

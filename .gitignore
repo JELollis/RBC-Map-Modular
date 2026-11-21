@@ -1,11 +1,57 @@
-.idea/
-.vs/
-sessions/*.db
-*.zip
+# Logs and sessions
+/logs/
+/sessions/
+/testing/
+/Version Control/logs/
+/Version Control/sessions/
+
+# System and IDE-specific
+/.idea/
+/.vs/
+/.vs/*
+*/.vs/
+/Qonda
+.DS_Store
+
+# Build and dist folders
+/Distributions/
+/Distributions/*
+
+# Sensitive or secret keys
+/secret.key
+/fernet_key.py
+
+# Database dumps and related
+/MySQL Dump/
+*.xlsx
+
+# Python cache
 __pycache__/
-logs/*.log
-*.pyc
-dist/
-*.xml
-/sessions
+/Version Control/__pycache__/
+/Version Control/__pycache__/variables.cpython-312.pyc
+
+# Config and YAML files
+qodana.yaml
+*.yaml
+*/.env
+
+# Misc
+/settings/
+*/sesions*/  # Possible typo? Should this be `/sessions*/` or corrected?
+/Helper Module Dev/
+
+# Data files
+*.json
+
+# IntelliJ IDEA and similar
+*/.idea
+/scratch.py
+/RBC Community Map.exe
+/shop_move_timestamp.txt
+*/.agents
+
+# Modular-repo additions
 discord_bot.py
+dist/
+*.zip
+*.xml
