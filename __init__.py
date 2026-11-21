@@ -2,7 +2,7 @@
 RBC Community Map — modular build.
 
 This package is the modular decomposition of the monolithic
-``main_0.13.3.0.py`` application. The modules use flat, absolute imports
+``main_1.0.4.py`` application. The modules use flat, absolute imports
 (``from imports import *``) and are launched via ``main.py``:
 
     python main.py

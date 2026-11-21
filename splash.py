@@ -1,6 +1,10 @@
 from imports import *
 
 
+# -----------------------
+# Theme Application
+# -----------------------
+
 def apply_theme_to_widget(widget: QWidget, color_mappings: dict) -> None:
     """Apply the selected theme colors to the given widget's stylesheet."""
     try:
@@ -63,6 +67,10 @@ def apply_theme_to_widget(widget: QWidget, color_mappings: dict) -> None:
         widget.setStyleSheet("")
 
 
+# -----------------------
+# Startup Splash
+# -----------------------
+
 class SplashScreen(QSplashScreen):
     def __init__(self, image_path: str, max_height: int = 400):
         if not os.path.exists(image_path):
@@ -91,6 +99,16 @@ class SplashScreen(QSplashScreen):
             Qt.GlobalColor.white,
             )
         QApplication.processEvents()
+
+
+# -----------------------
+# Splash Messages Decorator
+# -----------------------
+
+from functools import wraps
+
+from typing import Callable, Any
+
 
 
 def splash_message(

@@ -2,6 +2,10 @@ from imports import *
 from constants import *
 
 
+# -----------------------
+# Database Viewer Class
+# -----------------------
+
 class DatabaseViewer(QDialog):
     """
     Graphical interface for viewing SQLite database tables in grouped tabbed layout.
@@ -90,6 +94,8 @@ class DatabaseViewer(QDialog):
 
         for row_idx, row_data in enumerate(data):
             for col_idx, value in enumerate(row_data):
+                if table_name == "shops" and column_names[col_idx] in {"Column", "Row"} and value == "NA":
+                    value = ""
                 table_widget.setItem(row_idx, col_idx, QTableWidgetItem(str(value or "")))
 
         table_widget.resizeColumnsToContents()

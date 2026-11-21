@@ -2,6 +2,10 @@ from imports import *
 from constants import *
 
 
+# -----------------------
+# CSS Customization Dialog (Two-Factor)
+# -----------------------
+
 class CSSCustomizationDialog(QDialog):
     """
     Two-mode CSS customization dialog.
@@ -156,7 +160,7 @@ class CSSCustomizationDialog(QDialog):
         layout.addRow(note)
 
     def _pick_color(self, selector: str, prop: str) -> None:
-        color = QColorDialog.getColor(PySide6.QtGui.QColor('white'), self)
+        color = QColorDialog.getColor(self)
         if not color.isValid():
             return
 

@@ -1,5 +1,31 @@
 from imports import *
 from constants import *
+from secrets import *
+
+
+# -----------------------
+# Webview Cookie Database
+# -----------------------
+
+def redact_cookie_value(name: str, value: str) -> str:
+    """Return a log-safe version of a cookie value.
+
+    The RavenBlack 'ip' cookie is 'username#password'. We never want the
+    password written to the on-disk logs, but the login/logout distinction is
+    important when troubleshooting: a login cookie carries a password portion
+    while a logout cookie does not. So we keep the username and the '#'
+    separator and mask only the password characters:
+
+        login  -> "username#####"   (password present, obfuscated)
+        logout -> "username#"        (no password portion)
+
+    Non-'ip' cookies are returned unchanged.
+    """
+    if name == 'ip' and '#' in value:
+        username, password = value.split('#', 1)
+        return f"{username}#{'#####' if password else ''}"
+    return value
+
 
 
 def save_cookie_to_db(cookie: QNetworkCookie) -> bool:
@@ -25,15 +51,31 @@ def save_cookie_to_db(cookie: QNetworkCookie) -> bool:
 
             secure = int(cookie.isSecure())
             httponly = int(cookie.isHttpOnly())
-
             cursor.execute(
-                """
-                INSERT OR REPLACE INTO cookies
-                    (name, value, domain, path, expiration, secure, httponly)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (name, value, domain, path, expiration, secure, httponly),
+                "SELECT id FROM cookies WHERE name = ? AND domain = ? AND path = ? ORDER BY id LIMIT 1",
+                (name, domain, path),
             )
+            row = cursor.fetchone()
+            if row:
+                cookie_id = row[0]
+                cursor.execute(
+                    """
+                    UPDATE cookies SET value = NULL, expiration = ?, secure = ?, httponly = ?
+                    WHERE id = ?
+                    """,
+                    (expiration, secure, httponly, cookie_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO cookies
+                        (name, value, domain, path, expiration, secure, httponly)
+                    VALUES (?, NULL, ?, ?, ?, ?, ?)
+                    """,
+                    (name, domain, path, expiration, secure, httponly),
+                )
+                cookie_id = cursor.lastrowid
+            store_cookie_secret(conn, cookie_id, value)
 
             conn.commit()
 
@@ -44,13 +86,14 @@ def save_cookie_to_db(cookie: QNetworkCookie) -> bool:
             )
             return True
 
-    except sqlite3.Error as exc:
+    except (CredentialStoreError, sqlite3.Error) as exc:
         logging.error(
             "Failed to save/update cookie '%s': %s",
             cookie.name().data().decode("utf-8", errors="replace"),
             exc,
         )
         return False
+
 
 def load_cookies_from_db() -> list[QNetworkCookie]:
     """
@@ -63,12 +106,16 @@ def load_cookies_from_db() -> list[QNetworkCookie]:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT name, value, domain, path, expiration, secure, httponly
+                SELECT id, name, value, domain, path, expiration, secure, httponly
                 FROM cookies
                 """
             )
 
-            for name, value, domain, path, expiration, secure, httponly in cursor.fetchall():
+            for cookie_id, name, value, domain, path, expiration, secure, httponly in cursor.fetchall():
+                value = load_cookie_secret(conn, cookie_id, name, domain, path, value)
+                if value is None:
+                    logging.warning("Skipping cookie '%s' because its secret is unavailable", name)
+                    continue
                 cookie = QNetworkCookie(
                     name.encode("utf-8"),
                     value.encode("utf-8"),
@@ -88,6 +135,8 @@ def load_cookies_from_db() -> list[QNetworkCookie]:
                 cookie.setHttpOnly(bool(httponly))
                 cookies.append(cookie)
 
+            vacuum_migrated_secrets(conn)
+
         logging.debug(
             "Loaded %d cookies from database",
             len(cookies),
@@ -98,6 +147,7 @@ def load_cookies_from_db() -> list[QNetworkCookie]:
 
     return cookies
 
+
 def clear_cookie_db() -> bool:
     """
     Remove all cookies from the SQLite database.
@@ -105,8 +155,18 @@ def clear_cookie_db() -> bool:
     try:
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
+            cursor.execute("SELECT id, name FROM cookies")
+            cookie_keys = cursor.fetchall()
+            conn.execute("PRAGMA secure_delete = ON")
             cursor.execute("DELETE FROM cookies")
             conn.commit()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            for cookie_id, name in cookie_keys if not SQLITE_CREDENTIAL_STORAGE else ():
+                try:
+                    delete_secret(COOKIE_SECRET_NAMESPACE, cookie_secret_id(cookie_id))
+                except CredentialStoreError as exc:
+                    logging.error("Failed to delete cookie secret '%s': %s", name, exc)
+                    return False
 
         logging.info("Cleared all cookies from database")
         return True

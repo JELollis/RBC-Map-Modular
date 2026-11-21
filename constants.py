@@ -1,50 +1,96 @@
 from imports import *
 from splash import *
 
+
 # -----------------------
 # Global Constants
 # -----------------------
 
-BASE_DIR = Path(__file__).resolve().parent
+def _application_dir() -> Path:
+    """Return the directory containing the source or packaged executable."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        # PyInstaller stores onedir data under its bundle directory, which is
+        # not the same directory as the executable on macOS.
+        return Path(sys._MEIPASS).resolve()
+    if getattr(sys, "frozen", False) or "__compiled__" in globals():
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
-LOG_DIR = BASE_DIR / "logs"
-SESSIONS_DIR = BASE_DIR / "sessions"
-IMAGES_DIR = BASE_DIR / "images"
+
+
+APP_DIR = _application_dir()
+
+
+if os.name == "nt":
+    _local_data_root = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+else:
+    _local_data_root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+
+
+SQLITE_CREDENTIAL_STORAGE = os.getenv("RBC_MAP_CREDENTIAL_STORAGE") == "sqlite"
+
+DATA_DIR = _local_data_root / ("RBC-Map-SQLite" if SQLITE_CREDENTIAL_STORAGE else "RBC-Map")
+
+BASE_DIR = DATA_DIR
+
+
+LOG_DIR = DATA_DIR / "logs"
+
+SESSIONS_DIR = DATA_DIR / "sessions"
+
+IMAGES_DIR = APP_DIR / "images"
+
 
 DB_PATH = SESSIONS_DIR / "rbc_map_data.db"
+
+
+# Defined here (not in the migration block below) because
+# _secure_data_permissions() runs at import time and reads LEGACY_DB_NAME.
+LEGACY_DB_NAME = "rbc_map_data.db"
+
+# Written once the legacy question is settled; after that, never migrate again.
+LEGACY_MIGRATION_MARKER = ".legacy-migration-done"
+
 
 REQUIRED_DIRECTORIES = [
     LOG_DIR,
     SESSIONS_DIR,
-    IMAGES_DIR,
 ]
 
-VERSION_NUMBER = "0.13.3.0"
 
-# -----------------------
-# Location update API
-# -----------------------
+VERSION_NUMBER = "1.0.4"
 
-# Default timeout (seconds) for outbound HTTP calls in the update flow.
+
+# Default timeout (seconds) for outbound HTTP calls made on the UI thread.
 HTTP_REQUEST_TIMEOUT = 10
 
+
+# Endpoints for the bot-driven location update flow.
 # Preferred path is the tokenless /refresh endpoint; the token URLs below are
 # retained only for the legacy fallback used against older API servers.
 UPDATE_REFRESH_URL = "https://lollis-home.ddns.net/api/refresh"
+
 UPDATE_TOKEN_URL = "https://lollis-home.ddns.net/api/request-token.py"
+
 UPDATE_TRIGGER_URL = "https://lollis-home.ddns.net/api/trigger-update.py"
+
 UPDATE_LOCATIONS_URL = "https://lollis-home.ddns.net/api/locations.json"
+
 # Crowdsourced non-mover buildings (banks/taverns/transits/POI/lairs) contributed
 # by other clients; pulled down and merged into the local building tables.
 UPDATE_COMMUNITY_URL = "https://lollis-home.ddns.net/api/community_buildings.json"
+
 # Complete regular-building backup used when the accumulating community file
 # is empty or temporarily unavailable (first-run bootstrap).
 UPDATE_SEED_URL = "https://lollis-home.ddns.net/api/buildings_seed.json"
 
+
 # After triggering a scrape we poll locations.json until its "last_updated"
 # field advances (i.e. the bot finished), instead of a fixed blind sleep.
 REFRESH_POLL_MAX_SECONDS = 20.0
+
 REFRESH_POLL_INTERVAL_SECONDS = 1.5
+
 
 # -----------------------
 # Crowdsourced location reporting (report-back)
@@ -53,13 +99,15 @@ REFRESH_POLL_INTERVAL_SECONDS = 1.5
 # Endpoint that receives locations this client discovers on the game page, so
 # the scraper bot can keep shared data current between AVITD reveal cycles.
 # Gated by the user's opt-in preference; POST is fire-and-forget and any
-# failure is logged, never fatal. Inert until the server exposes the route.
-# See docs/crowdsourced-location-reporting.md.
+# failure is logged, never fatal. The endpoint is provided by the deployed
+# report-back service.
 REPORT_LOCATION_URL = "https://lollis-home.ddns.net/api/report-location"
+
 
 # Timeout (seconds) for the report POST. Kept short so a slow/down endpoint
 # never delays page processing.
 REPORT_TIMEOUT = 5
+
 
 # -----------------------
 # Minimap colors from the in-game CSS
@@ -87,6 +135,7 @@ CSS_MINIMAP_SELECTORS = {
     "edge": "td.cityblock",
 }
 
+
 # RBC's stock blood.css palette - the default when the active CSS doesn't
 # specify a given selector, so the minimap reads like the real in-game map.
 DEFAULT_MINIMAP_COLORS = {
@@ -106,12 +155,16 @@ DEFAULT_MINIMAP_COLORS = {
     "edge": "#0000dd",
 }
 
+
 # -----------------------
 # Logging Configuration
 # -----------------------
 
 DEFAULT_LOG_LEVEL = logging.DEBUG
+
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+
+
 
 # -----------------------
 # Keybinding Defaults
@@ -125,6 +178,7 @@ DEFAULT_KEYBINDS = {
     "zoom_in": "PageUp",
     "zoom_out": "PageDown",
 }
+
 
 # -----------------------
 # Building Metadata
@@ -142,6 +196,7 @@ BUILDING_CLASS_MAP = {
     # intentionally excluded: pk, human variants, object, sewer, bind, intersect
 }
 
+
 # -----------------------
 # Dependency Metadata (Validation Only)
 # -----------------------
@@ -154,8 +209,10 @@ required_modules = {
     "PySide6.QtWebEngineWidgets": "PySide6",
     "PySide6.QtWidgets": "PySide6",
     "bs4": "beautifulsoup4",
+    "keyring": "keyring",
     "requests": "requests",
 }
+
 
 # -----------------------
 # Application Icon

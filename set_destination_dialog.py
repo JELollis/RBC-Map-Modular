@@ -3,6 +3,10 @@ from constants import *
 from database import *
 
 
+# -----------------------
+# Set Destination Dialog
+# -----------------------
+
 class SetDestinationDialog(QDialog):
     """
     Dialog for selecting and setting a destination on the map.
@@ -473,7 +477,7 @@ class SetDestinationDialog(QDialog):
         status_dialog.setWindowTitle("Updating Location Data")
         status_dialog.setWindowFlags(Qt.Window | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
         layout = QVBoxLayout(status_dialog)
-        status_label = QLabel("Step 1: Triggering bot scrape...")
+        status_label = QLabel("Step 1: Triggering bot scrape (may take up to one minute)...")
         layout.addWidget(status_label)
         status_dialog.setFixedSize(400, 100)
         status_dialog.show()
@@ -481,7 +485,11 @@ class SetDestinationDialog(QDialog):
 
         try:
             # Step 1: Trigger update
-            self.parent.update_data()
+            if not self.parent.update_data():
+                status_label.setText("❌ Update failed.")
+                QApplication.processEvents()
+                QTimer.singleShot(2000, status_dialog.accept)
+                return
 
             # Step 2: Reload from DB
             status_label.setText("Step 2: Reloading updated location data...")

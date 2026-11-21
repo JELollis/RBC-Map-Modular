@@ -2,11 +2,19 @@ from imports import *
 from constants import *
 
 
+# -----------------------
+# Damage Calculator Tool
+# -----------------------
+
+from dataclasses import dataclass
+
+
 REQUIRED_WEAPONS = {
     "Vial of Holy Water",
     "Garlic Spray",
     "Wooden Stake",
 }
+
 # NOTE:
 # Scrolls of Turning are intentionally excluded:
 # - probabilistic damage
@@ -18,6 +26,7 @@ REQUIRED_WEAPONS = {
 class Weapon:
     name: str
     prices: list[int]  # indexed by charisma level
+
 
 
 class DamageCalculator(QDialog):

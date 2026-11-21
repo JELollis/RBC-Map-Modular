@@ -1,0 +1,48 @@
+[OPTIONS]
+Compatibility=1.1 or later
+Compiled file=RBC Community Map Help.chm
+Contents file=RBC Community Map Help.hhc
+Default topic=RBC_Map_Help.html
+Display compile progress=No
+Full-text search=Yes
+Language=0x409 English (United States)
+Title=RBC Community Map Help
+
+[FILES]
+RBC_Map_Help.html
+Linux_Installation.html
+images/Add Quantity.png
+images/CSS Customization 1.png
+images/CSS Customization 2.png
+images/CSS Customization 3.png
+images/CSS Customization 4.png
+images/Character List.png
+images/Compass Routes.png
+images/Confirmed Items.png
+images/Damage Calculator.png
+images/Database Viewer.png
+images/File Menu.png
+images/Help Menu.png
+images/InfoBars_Dest.png
+images/InfoBars_No_Dest.png
+images/Keybindings Menu.png
+images/Log Viewer.png
+images/Logging Menu.png
+images/Main UI - Labeled.png
+images/Main UI.png
+images/MenuBar.png
+images/Minimap Controls.png
+images/Minimap Theme Customization.png
+images/Minimap_Transit_route.png
+images/Minimap_Zoom_3.png
+images/Minimap_direct_route.png
+images/Powers Reference.png
+images/Remove Item.png
+images/Resources Menu.png
+images/Route Label.png
+images/Select Charisma.png
+images/Select Shop.png
+images/Set Destination Dialog.png
+images/Settings Menu.png
+images/Tools Menu.png
+images/UI Theme Customization.png

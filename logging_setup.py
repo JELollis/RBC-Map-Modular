@@ -1,5 +1,7 @@
 from imports import *
 from constants import *
+from directories import *
+
 
 
 def get_logging_level_from_db(default: int = logging.INFO) -> int:
@@ -13,10 +15,21 @@ def get_logging_level_from_db(default: int = logging.INFO) -> int:
             row = cursor.fetchone()
             if row:
                 return int(row[0])
+    except sqlite3.OperationalError as exc:
+        # The schema is created after logging is configured. A missing settings
+        # table is therefore expected on a first launch, not an application
+        # failure worth printing to stderr.
+        if "no such table" not in str(exc).lower():
+            print(f"Failed to load log level from DB: {exc}", file=sys.stderr)
     except Exception as exc:
         print(f"Failed to load log level from DB: {exc}", file=sys.stderr)
     return default
 
+
+
+# -----------------------
+# Logging Setup
+# -----------------------
 
 def setup_logging(
         log_dir: os.PathLike | str = LOG_DIR,
@@ -71,6 +84,7 @@ def setup_logging(
         return False
 
 
+
 # Initialize logging at startup
 if not setup_logging(log_level=get_logging_level_from_db()):
     print(
@@ -83,7 +97,15 @@ if not setup_logging(log_level=get_logging_level_from_db()):
         stream=sys.stderr,
     )
 
+
 logging.info("Launching app version %s", VERSION_NUMBER)
+
+if LEGACY_MIGRATION_MESSAGE:
+    if "failed" in LEGACY_MIGRATION_MESSAGE:
+        logging.error(LEGACY_MIGRATION_MESSAGE)
+    else:
+        logging.info(LEGACY_MIGRATION_MESSAGE)
+
 
 
 def save_logging_level_to_db(level: int) -> bool:

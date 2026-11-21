@@ -4,7 +4,7 @@ Shared imports and runtime environment setup for the RBC Community Map.
 This module centralizes every standard-library and third-party import used
 across the modular application so individual modules can simply do
 ``from imports import *``. It mirrors the import surface of the original
-monolithic ``main_0.13.3.0.py`` build.
+monolithic ``main_1.0.4.py`` build.
 """
 
 # -----------------------
@@ -18,14 +18,19 @@ import math
 import os
 import platform
 import re
+import shutil
 import sqlite3
 import sys
 import threading
 import time
 import uuid
 import webbrowser
+import hashlib
+from concurrent.futures import Future, TimeoutError
 from datetime import datetime, timedelta, timezone
+from importlib import metadata as importlib_metadata
 from pathlib import Path
+from threading import Event, Lock, RLock, Thread
 from functools import wraps
 from dataclasses import dataclass
 from typing import (
@@ -38,6 +43,7 @@ from typing import (
 # -----------------------
 
 import requests
+import keyring
 from bs4 import BeautifulSoup
 
 
@@ -58,8 +64,16 @@ def configure_qtwebengine_environment() -> None:
         os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
         os.environ.setdefault(
             "QTWEBENGINE_CHROMIUM_FLAGS",
-            "--disable-software-rasterizer",
+            "--disable-gpu --disable-gpu-compositing",
         )
+        # Virtual machines frequently expose an incomplete GLX/GBM stack.
+        # Let Chromium use software rendering instead of failing during view
+        # initialization when the host GPU cannot provide a scanout buffer.
+        # Keep Qt Quick usable when the VM has no working GLX/EGL context.
+        # Disabling the XCB integration entirely also prevents the app's own
+        # Qt widgets from rendering, so use Qt's software backend instead.
+        os.environ.setdefault("QT_QUICK_BACKEND", "software")
+        os.environ.setdefault("QT_OPENGL", "software")
 
     elif platform_name == "darwin":
         # macOS (notably VMware / Parallels GPU instability)
@@ -97,6 +111,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSplashScreen,
     QStyle, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget, QInputDialog, QSizePolicy, QStackedWidget,
+    QSplitter,
 )
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineProfile, QWebEngineSettings

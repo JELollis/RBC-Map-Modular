@@ -2,6 +2,10 @@ from imports import *
 from constants import *
 
 
+# -----------------------
+# Discord Menu
+# -----------------------
+
 class DiscordServerDialog(QDialog):
     """
     Read-only dialog listing community Discord servers.

@@ -2,6 +2,14 @@ from imports import *
 from constants import *
 
 
+# -----------------------
+# Compass Overlay
+# -----------------------
+
+from dataclasses import dataclass
+
+
+
 @dataclass
 class CompassRoute:
     label: str
@@ -10,6 +18,7 @@ class CompassRoute:
     path: list
     bg_color: PySide6.QtGui.QColor
     text_color: PySide6.QtGui.QColor
+
 
 
 class CompassOverlay(QDialog):

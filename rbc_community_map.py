@@ -2,6 +2,7 @@ from imports import *
 from constants import *
 from directories import *
 from logging_setup import *
+from secrets import *
 from cookies import *
 from database import *
 from splash import *
@@ -32,6 +33,7 @@ def _fetch_locations_json(timeout: int) -> dict:
         raise ValueError("Invalid JSON received from locations endpoint") from exc
 
 
+
 def _timestamp_advanced(latest_ts, baseline_ts) -> bool:
     """True only if ``latest_ts`` is present and strictly newer than baseline.
 
@@ -47,6 +49,7 @@ def _timestamp_advanced(latest_ts, baseline_ts) -> bool:
     if not baseline_ts:
         return True
     return latest_ts > baseline_ts
+
 
 
 def _fetch_location_update_v2(
@@ -121,6 +124,7 @@ def _fetch_location_update_v2(
     return latest
 
 
+
 def _fetch_location_update_legacy(sleep_seconds: float, timeout: int, log_prefix: str) -> dict:
     """Legacy token -> trigger -> blind-sleep -> fetch flow.
 
@@ -144,6 +148,7 @@ def _fetch_location_update_legacy(sleep_seconds: float, timeout: int, log_prefix
     time.sleep(sleep_seconds)
 
     return _fetch_locations_json(timeout)
+
 
 
 def fetch_location_update(
@@ -195,7 +200,15 @@ def fetch_location_update(
     return _fetch_location_update_legacy(sleep_seconds, timeout, log_prefix)
 
 
+
 class StartupUpdateWorker(QObject):
+    """Fetches fresh location data on startup, off the UI thread.
+
+    Runs :func:`fetch_location_update` inside a ``QThread`` and reports progress
+    through the ``started``/``finished`` signals, so the blocking network calls
+    and inter-request delay never freeze the main window.
+    """
+
     started = Signal()
     finished = Signal(bool, str)  # (ok, message)
 
@@ -207,10 +220,10 @@ class StartupUpdateWorker(QObject):
 
     @pyqtSlot()
     def run(self) -> None:
+        """Fetch location data and write it to the DB, emitting result signals."""
         self.started.emit()
 
         try:
-            # Runs on a worker thread, so it can use the full poll budget.
             data = fetch_location_update(
                 sleep_seconds=10,
                 timeout=self.REQUEST_TIMEOUT,
@@ -249,6 +262,7 @@ class StartupUpdateWorker(QObject):
                 exc,
             )
             self.finished.emit(False, "Startup update failed")
+
 
 # ---------------------------------------------------------------------
 # QtNetwork-based Startup Update (PLACEHOLDER / NOT ACTIVE)
@@ -331,6 +345,10 @@ class RBCCommunityMap(QMainWindow):
         self.splash = splash
         self.is_updating_minimap = False
         self.login_needed = True
+        self.pending_login = False
+        self._pending_login_character = None
+        self._login_retry_count = 0
+        self._login_request_id = 0
         self.auto_login_enabled = True
         self.webview_loaded = False
 
@@ -344,6 +362,10 @@ class RBCCommunityMap(QMainWindow):
         self.character_y = None
         self.selected_character = None
         self.destination = None
+        # Webview loadFinished can fire before the first character selection.
+        self.pending_character_id_for_map = None
+        self._pending_cookie_character = None
+        self._pending_cookie_request_id = None
 
         # Self-learning building cache
         self._seen_buildings: set[tuple[str, str, str]] = set()
@@ -380,6 +402,13 @@ class RBCCommunityMap(QMainWindow):
             icon_path = IMAGES_DIR / "favicon.ico"
             self.setWindowIcon(PySide6.QtGui.QIcon(str(icon_path)))
             self.setWindowTitle("RBC Community Map")
+            # Explicitly request standard window-manager controls.  Some
+            # Linux desktop/VM configurations omit maximize/restore unless
+            # these hints are present on the top-level window.
+            self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
+            self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+            self.setWindowFlag(Qt.WindowType.WindowSystemMenuHint, True)
+            self.setMinimumSize(900, 600)
             self.setGeometry(100, 100, 1200, 800)
             self.load_theme_settings()
             self.apply_theme()
@@ -389,12 +418,14 @@ class RBCCommunityMap(QMainWindow):
 
     @splash_message(lambda self: self.splash, "Initializing web profile")
     def _init_web_profile(self) -> None:
-        self.web_profile = QWebEngineProfile.defaultProfile()
-
         try:
             SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            remove_persistent_browser_cookies(SESSIONS_DIR)
+            self.web_profile = QWebEngineProfile.defaultProfile()
+            # QtWebEngine must not persist cookies; credentials are restored
+            # explicitly from the OS credential store by setup_cookie_handling.
             self.web_profile.setPersistentCookiesPolicy(
-                QWebEngineProfile.ForcePersistentCookies
+                QWebEngineProfile.NoPersistentCookies
             )
             self.web_profile.setPersistentStoragePath(str(SESSIONS_DIR))
             self.setup_cookie_handling()
@@ -460,7 +491,6 @@ class RBCCommunityMap(QMainWindow):
             "user_building": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "lair.png")),
             "guild": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "guild.png")),
             "shop": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "shop.png")),
-            "graveyard": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "graveyard.png")),
             "graveyard": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "graveyard.png")),
             "arena": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "arena.png")),
             "alchemy": PySide6.QtGui.QPixmap(str(IMAGES_DIR / "alchemy.png")),
@@ -540,6 +570,35 @@ class RBCCommunityMap(QMainWindow):
 
         except Exception as e:
             logging.error(f"Failed to start startup update worker: {e}")
+
+    def resizeEvent(self, event) -> None:
+        """Keep the navigation panel usable as the window is resized."""
+        super().resizeEvent(event)
+        self._update_navigation_sizes()
+
+    def _update_navigation_sizes(self) -> None:
+        """Scale the minimap to the available navigation-panel space."""
+        if not hasattr(self, "left_frame") or not hasattr(self, "minimap_label"):
+            return
+
+        panel_width = max(0, self.left_frame.width() - 16)
+        panel_height = max(0, self.left_frame.height())
+        # Keep the square minimap readable while leaving room for the controls
+        # below it. The panel itself follows the window height automatically.
+        target_size = min(280, panel_width, max(160, panel_height // 3))
+        target_size = max(160, target_size)
+        if target_size == self.minimap_size:
+            return
+
+        self.minimap_size = target_size
+        self.minimap_frame.setFixedSize(target_size, target_size)
+        self.minimap_label.setFixedSize(target_size, target_size)
+        self.update_minimap()
+
+    def _schedule_navigation_resize(self) -> None:
+        """Debounce minimap redraws while the navigation splitter is dragged."""
+        if hasattr(self, "_navigation_resize_timer"):
+            self._navigation_resize_timer.start(75)
 
     def _on_startup_update_finished(self, ok: bool, msg: str):
         # Refresh any UI that depends on DB state (no heavy work here)
@@ -769,8 +828,9 @@ class RBCCommunityMap(QMainWindow):
             self.color_mappings = {"background": PySide6.QtGui.QColor("#3b3b3b"),
                                    "text_color": PySide6.QtGui.QColor("#dddddd")}
 
-        # Resolve colors with precedence: RBC defaults < active CSS < user picks
-        # (both apply the persisted minimap_css_overrides on top).
+        # Overlay the minimap building/map colors from the active game CSS so
+        # the minimap matches how the map looks in-game (falls back to the RBC
+        # default palette), then derive the whole-app UI theme from the same CSS.
         self.apply_minimap_colors_from_css()
         self.apply_ui_theme_from_css()
 
@@ -835,6 +895,19 @@ class RBCCommunityMap(QMainWindow):
                 value = color.name(PySide6.QtGui.QColor.NameFormat.HexArgb)
         return value
 
+    @staticmethod
+    def _css_background_image(css: str, selector: str) -> str | None:
+        """Return the last background-image URL declared for a selector."""
+        found = None
+        for rule in re.finditer(r"([^{}]+)\{([^}]*)\}", css or ""):
+            selectors = [s.strip().lower() for s in rule.group(1).split(",")]
+            if selector.strip().lower() not in selectors:
+                continue
+            match = re.search(r"background-image\s*:\s*url\(\s*['\"]?([^'\")]+)", rule.group(2), re.IGNORECASE)
+            if match:
+                found = match.group(1).strip()
+        return found
+
     def apply_minimap_colors_from_css(self) -> None:
         """Set the minimap's building/map colors from the active CSS.
 
@@ -851,12 +924,12 @@ class RBCCommunityMap(QMainWindow):
             self.color_mappings = {}
         background = self._css_background_color(css, CSS_MINIMAP_SELECTORS["background"])
         # The game page is black even when a custom profile omits an explicit
-        # body background rule; transparent custom grid cells must sit on
-        # black, not on Qt's light-gray widget default.
+        # body background rule; transparent Fern grid cells must therefore sit
+        # on black, not on Qt's light-gray widget default.
         self.minimap_background_color = PySide6.QtGui.QColor(background or "#000000")
         self.minimap_text_colors = {}
         self.minimap_border_colors = {}
-        # User overrides (highest precedence) persisted under minimap_css_overrides.
+        self.minimap_texture_pixmaps = {}
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 row = conn.execute(
@@ -873,7 +946,6 @@ class RBCCommunityMap(QMainWindow):
             selector = CSS_MINIMAP_SELECTORS.get(key)
             hex_val = self._css_background_color(css, selector) if selector else None
             self.color_mappings[key] = PySide6.QtGui.QColor(hex_val or default_hex)
-            # defaults < CSS < user override
             if key in stored_overrides:
                 override = PySide6.QtGui.QColor(stored_overrides[key])
                 if override.isValid():
@@ -883,9 +955,42 @@ class RBCCommunityMap(QMainWindow):
                 border = self._css_property_color(css, selector, "border-color") or self._css_property_color(css, selector, "border")
                 self.minimap_text_colors[key] = PySide6.QtGui.QColor(text or "white")
                 self.minimap_border_colors[key] = PySide6.QtGui.QColor(border or "white")
+                image_url = self._css_background_image(css, selector)
+                if image_url:
+                    try:
+                        response = requests.get(image_url, timeout=5)
+                        pixmap = PySide6.QtGui.QPixmap()
+                        if response.ok and pixmap.loadFromData(response.content):
+                            self.minimap_texture_pixmaps[key] = pixmap
+                    except (requests.RequestException, OSError) as exc:
+                        logging.debug("Minimap texture unavailable for %s: %s", key, exc)
+        self.minimap_route_colors = {
+            "tavern": PySide6.QtGui.QColor(self.color_mappings["tavern"]),
+            "bank": PySide6.QtGui.QColor(self.color_mappings["bank"]),
+            "transit": PySide6.QtGui.QColor(self.color_mappings["transit"]),
+        }
+        self.minimap_route_colors["direct"] = self._complementary_color(self.minimap_route_colors["tavern"])
+        self.minimap_route_colors["transit_route"] = self._complementary_color(self.minimap_route_colors["transit"])
+        if str(getattr(self, "current_css_profile", "Default")).strip().lower() == "default":
+            self.minimap_route_colors["direct"] = PySide6.QtGui.QColor("green")
+            self.minimap_route_colors["transit_route"] = PySide6.QtGui.QColor(170, 0, 170)
+        if hasattr(self, "destination_label"):
+            direct = self.minimap_route_colors["direct"].name()
+            transit_route = self.minimap_route_colors["transit_route"].name()
+            self.bank_label.setStyleSheet(f"background-color:{self.minimap_route_colors['bank'].name()}; color:white; font-weight:bold; padding:5px; border:2px solid black; font-size:12px;")
+            self.transit_label.setStyleSheet(f"background-color:{self.minimap_route_colors['transit'].name()}; color:white; font-weight:bold; padding:5px; border:2px solid black; font-size:12px;")
+            self.tavern_label.setStyleSheet(f"background-color:{self.minimap_route_colors['tavern'].name()}; color:white; font-weight:bold; padding:5px; border:2px solid black; font-size:12px;")
+            self.destination_label.setStyleSheet(f"background-color:{direct}; color:white; font-weight:bold; padding:5px; border:2px solid black; font-size:12px;")
+            self.transit_destination_label.setStyleSheet(f"background-color:{transit_route}; color:white; font-weight:bold; padding:5px; border:2px solid black; font-size:12px;")
 
     @staticmethod
-    def _blend(c1: "PySide6.QtGui.QColor", c2: "PySide6.QtGui.QColor", t: float) -> "PySide6.QtGui.QColor":
+    def _complementary_color(color: PySide6.QtGui.QColor) -> PySide6.QtGui.QColor:
+        """Return a readable hue-opposite color while preserving saturation/value."""
+        h, s, v, a = color.getHsv()
+        return PySide6.QtGui.QColor.fromHsv((h + 180) % 360 if h >= 0 else 0, max(s, 180), max(v, 180), a)
+
+    @staticmethod
+    def _blend(c1: PySide6.QtGui.QColor, c2: PySide6.QtGui.QColor, t: float) -> PySide6.QtGui.QColor:
         """Linear blend from c1 toward c2 by t in [0, 1]."""
         return PySide6.QtGui.QColor(
             round(c1.red() * (1 - t) + c2.red() * t),
@@ -894,9 +999,8 @@ class RBCCommunityMap(QMainWindow):
         )
 
     @staticmethod
-    def _readable_text(bg: "PySide6.QtGui.QColor") -> "PySide6.QtGui.QColor":
+    def _readable_text(bg: PySide6.QtGui.QColor) -> PySide6.QtGui.QColor:
         """Return black or white, whichever is more readable on ``bg``."""
-        # Perceived luminance (sRGB weights); light bg -> dark text, dark -> light.
         lum = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255.0
         return PySide6.QtGui.QColor("#000000") if lum > 0.55 else PySide6.QtGui.QColor("#e6e6e6")
 
@@ -907,8 +1011,7 @@ class RBCCommunityMap(QMainWindow):
         from ``body``/``p``/``td``, and an accent from the ``h1`` heading (RBC's
         red title by default). Button/surface shades are derived by blending so
         the app always stays readable regardless of the loaded profile. Falls
-        back to the RBC default palette (black bg, light text, red accent).
-        These feed :meth:`apply_theme`.
+        back to the RBC default palette. These feed :meth:`apply_theme`.
         """
         try:
             css = self.load_current_css() or ""
@@ -928,8 +1031,6 @@ class RBCCommunityMap(QMainWindow):
         self.color_mappings["background"] = bg
         self.color_mappings["text_color"] = text
         self.color_mappings["accent"] = accent
-        # Buttons/inputs: a surface a bit lifted from the background so controls
-        # read as distinct without a second CSS source.
         self.color_mappings["button_color"] = self._blend(bg, text, 0.20)
         # User overrides win over the CSS/default UI palette (same store the
         # minimap uses), so a hand-picked background/text/button/accent sticks.
@@ -995,16 +1096,15 @@ class RBCCommunityMap(QMainWindow):
             btn = self.color_mappings.get("button_color", PySide6.QtGui.QColor("#444444"))
             accent = self.color_mappings.get("accent", PySide6.QtGui.QColor("#ff0000"))
 
-            # Button border/hover honor explicit user overrides, else the accent.
-            # Subtle resting border by default; accent is reserved for hover.
+            # Button border: subtle by default (a shade lifted from the bg);
+            # only an explicit user override uses a bold color. Accent is kept
+            # for hover, not the resting outline.
             border = self.color_mappings.get("button_border_color") or self._blend(bg, text, 0.35)
-            hover = self.color_mappings.get("button_hover_color", accent)
 
             bg_color, text_color, btn_color, acc = bg.name(), text.name(), btn.name(), accent.name()
-            border_h, hover_h = border.name(), hover.name()
+            border_h = border.name()
             btn_text = self._readable_text(btn).name()
             acc_text = self._readable_text(accent).name()
-            hover_text = self._readable_text(hover).name()
             field_bg = self._blend(bg, text, 0.10).name()
             # A slightly stronger line than the button border, used to outline
             # the main panels so the minimap edge reads distinctly from the app.
@@ -1016,7 +1116,7 @@ class RBCCommunityMap(QMainWindow):
                 f" border: 1px solid {section_border}; }}"
                 f"QPushButton {{ background-color: {btn_color}; color: {btn_text};"
                 f" border: 1px solid {border_h}; border-radius: 4px; padding: 3px 6px; }}"
-                f"QPushButton:hover {{ background-color: {hover_h}; color: {hover_text}; }}"
+                f"QPushButton:hover {{ background-color: {acc}; color: {acc_text}; }}"
                 f"QLabel {{ color: {text_color}; }}"
                 f"QMenuBar, QMenu {{ background-color: {bg_color}; color: {text_color}; }}"
                 f"QMenuBar::item:selected, QMenu::item:selected {{ background-color: {acc}; color: {acc_text}; }}"
@@ -1038,8 +1138,6 @@ class RBCCommunityMap(QMainWindow):
         dialog = ThemeCustomizationDialog(self, color_mappings=self.color_mappings)
         if dialog.exec():
             self.color_mappings = dialog.color_mappings
-            # Only the elements the user actually changed become overrides
-            # (highest precedence); everything else still follows CSS/defaults.
             overrides = dict(getattr(self, "minimap_css_overrides", {}))
             overrides.update({
                 key: self.color_mappings[key].name()
@@ -1049,11 +1147,6 @@ class RBCCommunityMap(QMainWindow):
             self.minimap_css_overrides = overrides
             self.apply_theme()
             self.apply_minimap_colors_from_css()
-            try:
-                if self.character_x is not None and self.character_y is not None:
-                    self.update_minimap()
-            except Exception as e:
-                logging.debug(f"Minimap redraw after theme change skipped: {e}")
             if self.save_theme_settings():
                 logging.info("Theme updated and saved")
             else:
@@ -1079,10 +1172,14 @@ class RBCCommunityMap(QMainWindow):
         try:
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT name, domain, path, value, expiration, secure, httponly FROM cookies")
+                cursor.execute("SELECT id, name, domain, path, value, expiration, secure, httponly FROM cookies")
                 cookies = cursor.fetchall()
 
-                for name, domain, path, value, expiration, secure, httponly in cookies:
+                for cookie_id, name, domain, path, value, expiration, secure, httponly in cookies:
+                    value = load_cookie_secret(conn, cookie_id, name, domain, path, value)
+                    if value is None:
+                        logging.warning("Skipping cookie '%s' because its secret is unavailable", name)
+                        continue
                     cookie = QNetworkCookie(name.encode('utf-8'), value.encode('utf-8'))
                     cookie.setDomain(domain)
                     cookie.setPath(path)
@@ -1101,6 +1198,7 @@ class RBCCommunityMap(QMainWindow):
                         except ValueError as e:
                             logging.warning(f"Failed to parse expiration '{expiration}' for cookie '{name}': {e}")
                     self.cookie_store.setCookie(cookie, QUrl(f"https://{domain}"))
+                vacuum_migrated_secrets(conn)
                 logging.debug(f"Loaded {len(cookies)} cookies from database")
         except sqlite3.Error as e:
             logging.error(f"Failed to load cookies: {e}")
@@ -1121,30 +1219,62 @@ class RBCCommunityMap(QMainWindow):
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
 
-                # Check if this exact cookie already exists
-                cursor.execute("""
-                    SELECT id FROM cookies 
-                    WHERE name = ? AND value = ? AND domain = ? AND path = ?
-                """, (name, value, domain, path))
-                existing = cursor.fetchone()
+                # IP cookies are account-specific. Reuse the row already linked to
+                # that character; other cookies are keyed by their metadata.
+                existing = None
+                username = value.split('#', 1)[0] if name == 'ip' and '#' in value else None
+                if name == 'ip':
+                    if not username:
+                        return
+                    _, password = value.split('#', 1)
+                    if not password.strip():
+                        logging.debug("Ignoring logout cookie for '%s'", username)
+                        return
+                    cursor.execute(
+                        "SELECT active_cookie FROM characters WHERE name = ?",
+                        (username,),
+                    )
+                    existing = cursor.fetchone()
+                    if existing and existing[0] is None:
+                        existing = None
+                    if existing is None and not cursor.execute(
+                        "SELECT 1 FROM characters WHERE name = ?", (username,)
+                    ).fetchone():
+                        logging.warning("Ignoring IP cookie for unknown character '%s'", username)
+                        return
+                else:
+                    cursor.execute("""
+                        SELECT id FROM cookies
+                        WHERE name = ? AND domain = ? AND path = ?
+                        ORDER BY id LIMIT 1
+                    """, (name, domain, path))
+                    existing = cursor.fetchone()
 
                 if existing:
-                    logging.debug(f"Duplicate cookie '{name}' for value '{value}' not saved.")
-                    return
+                    new_cookie_id = existing[0]
+                    cursor.execute("""
+                        UPDATE cookies SET value = NULL, expiration = ?, secure = ?, httponly = ?
+                        WHERE id = ?
+                    """, (
+                        cookie.expirationDate().toString(Qt.DateFormat.ISODate) if not cookie.isSessionCookie() else None,
+                        int(cookie.isSecure()), int(cookie.isHttpOnly()), new_cookie_id,
+                    ))
+                    logging.debug("Updated cookie '%s'", name)
+                else:
+                    cursor.execute("""
+                        INSERT INTO cookies (name, value, domain, path, expiration, secure, httponly)
+                        VALUES (?, NULL, ?, ?, ?, ?, ?)
+                    """, (
+                        name, domain, path,
+                        cookie.expirationDate().toString(Qt.DateFormat.ISODate) if not cookie.isSessionCookie() else None,
+                        int(cookie.isSecure()), int(cookie.isHttpOnly())
+                    ))
+                    new_cookie_id = cursor.lastrowid
+                    logging.debug("Saved cookie '%s'", name)
 
-                # Insert new cookie
-                cursor.execute("""
-                    INSERT INTO cookies (name, value, domain, path, expiration, secure, httponly)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    name, value, domain, path,
-                    cookie.expirationDate().toString(Qt.DateFormat.ISODate) if not cookie.isSessionCookie() else None,
-                    int(cookie.isSecure()), int(cookie.isHttpOnly())
-                ))
-
-                new_cookie_id = cursor.lastrowid
+                store_cookie_secret(conn, new_cookie_id, value)
                 conn.commit()
-                logging.debug(f"Saved new cookie '{name}' (ID {new_cookie_id}) for domain '{domain}'")
+                logging.debug(f"Saved cookie '{name}' (ID {new_cookie_id}) for domain '{domain}'")
 
                 # If it's an ip cookie, consider linking to character
                 if name == 'ip' and '#' in value:
@@ -1163,7 +1293,7 @@ class RBCCommunityMap(QMainWindow):
                         conn.commit()
                         logging.debug(f"Set active_cookie for character '{username}' to cookie ID {new_cookie_id}")
 
-        except Exception as e:
+        except (CredentialStoreError, sqlite3.Error) as e:
             logging.error(f"Error saving cookie '{name}': {e}")
 
     def set_ip_cookie(self, name: str, password: str):
@@ -1175,24 +1305,27 @@ class RBCCommunityMap(QMainWindow):
                 domain = 'quiz.ravenblack.net'
                 path = '/'
 
-                # Avoid duplicate
+                # Keep a separate row/keyring entry for each character.
                 cursor.execute("""
-                    SELECT id FROM cookies WHERE name = 'ip' AND value = ? AND domain = ? AND path = ?
-                """, (value, domain, path))
+                    SELECT active_cookie FROM characters WHERE name = ?
+                """, (name,))
                 row = cursor.fetchone()
 
-                if row:
+                if row and row[0] is not None:
                     cookie_id = row[0]
+                    cursor.execute("UPDATE cookies SET value = NULL WHERE id = ?", (cookie_id,))
                 else:
                     cursor.execute('''
                         INSERT INTO cookies (name, value, domain, path, expiration, secure, httponly)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, NULL, ?, ?, ?, ?, ?)
                     ''', (
-                        'ip', value, domain, path,
+                        'ip', domain, path,
                         QDateTime.currentDateTime().addDays(30).toString(Qt.DateFormat.ISODate),
                         0, 0
                     ))
                     cookie_id = cursor.lastrowid
+
+                store_cookie_secret(conn, cookie_id, value)
 
                 # Set this cookie as active, clear others
                 cursor.execute("UPDATE characters SET active_cookie = NULL")
@@ -1200,7 +1333,7 @@ class RBCCommunityMap(QMainWindow):
                 conn.commit()
                 logging.debug(f"Set active_cookie ID {cookie_id} for {name}")
 
-        except sqlite3.Error as e:
+        except (CredentialStoreError, sqlite3.Error) as e:
             logging.error(f"Failed to insert 'ip' cookie for {name}: {e}")
 
     # -----------------------
@@ -1229,8 +1362,8 @@ class RBCCommunityMap(QMainWindow):
         self.website_frame.settings().setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, False)
         self.website_frame.settings().setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, False)
         self.website_frame.settings().setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
-        self.website_frame.setUrl(QUrl('https://quiz.ravenblack.net/blood.pl'))
         self.website_frame.loadFinished.connect(self.on_webview_load_finished)
+        self.website_frame.setUrl(QUrl('https://quiz.ravenblack.net/blood.pl'))
 
         # Add Keybindings
         self.setup_keybindings()
@@ -1277,7 +1410,9 @@ class RBCCommunityMap(QMainWindow):
 
         # Compass Icon Button
         self.compass_button = QPushButton()
-        self.compass_button.setIcon(PySide6.QtGui.QIcon(PySide6.QtGui.QPixmap("images/compass.png")))
+        self.compass_button.setIcon(
+            PySide6.QtGui.QIcon(PySide6.QtGui.QPixmap(str(IMAGES_DIR / "compass.png")))
+        )
         self.compass_button.setIconSize(QSize(28, 28))  # Adjust as needed
         self.compass_button.setFixedSize(34, 34)
         self.compass_button.setStyleSheet("background-color: transparent; border: none;")
@@ -1329,21 +1464,28 @@ class RBCCommunityMap(QMainWindow):
 
         # Main layout for map and controls
         map_layout = QHBoxLayout()
-        main_layout.addLayout(map_layout)
+        map_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addLayout(map_layout, stretch=1)
 
         # Left layout containing the minimap and control buttons
         left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(5, 5, 5, 5)
+        left_layout.setSpacing(4)
         left_frame = QFrame()
         left_frame.setObjectName("leftFrame")
         left_frame.setFrameShape(QFrame.Shape.Box)
-        left_frame.setFixedWidth(300)
+        left_frame.setMinimumWidth(270)
+        left_frame.setMaximumWidth(480)
+        left_frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         left_frame.setLayout(left_layout)
+        self.left_frame = left_frame
 
         # Minimap setup
         minimap_frame = QFrame()
         minimap_frame.setObjectName("minimapFrame")
         minimap_frame.setFrameShape(QFrame.Shape.Box)
         minimap_frame.setFixedSize(self.minimap_size, self.minimap_size)
+        self.minimap_frame = minimap_frame
         minimap_layout = QVBoxLayout()
         minimap_layout.setContentsMargins(0, 0, 0, 0)
         minimap_frame.setLayout(minimap_layout)
@@ -1351,6 +1493,7 @@ class RBCCommunityMap(QMainWindow):
         # Label to display the minimap
         self.minimap_label = QLabel()
         self.minimap_label.setFixedSize(self.minimap_size, self.minimap_size)
+        self.minimap_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.minimap_label.setStyleSheet("background-color: lightgrey;")
         minimap_layout.addWidget(self.minimap_label)
         left_layout.addWidget(minimap_frame)
@@ -1359,7 +1502,7 @@ class RBCCommunityMap(QMainWindow):
         info_frame = QFrame()
         info_frame.setObjectName("infoFrame")
         info_frame.setFrameShape(QFrame.Shape.Box)
-        info_frame.setFixedHeight(260)
+        info_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         info_layout = QVBoxLayout()
         info_layout.setSpacing(5)
         info_frame.setLayout(info_layout)
@@ -1380,7 +1523,8 @@ class RBCCommunityMap(QMainWindow):
         self.bank_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.bank_label.setStyleSheet(label_style.format(color="blue"))
         self.bank_label.setWordWrap(True)
-        self.bank_label.setFixedHeight(45)
+        self.bank_label.setMinimumHeight(32)
+        self.bank_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         info_layout.addWidget(self.bank_label)
 
         # Closest Transit Info
@@ -1388,7 +1532,8 @@ class RBCCommunityMap(QMainWindow):
         self.transit_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.transit_label.setStyleSheet(label_style.format(color="red"))
         self.transit_label.setWordWrap(True)
-        self.transit_label.setFixedHeight(45)
+        self.transit_label.setMinimumHeight(32)
+        self.transit_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         info_layout.addWidget(self.transit_label)
 
         # Closest Tavern Info
@@ -1396,7 +1541,8 @@ class RBCCommunityMap(QMainWindow):
         self.tavern_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.tavern_label.setStyleSheet(label_style.format(color="orange"))
         self.tavern_label.setWordWrap(True)
-        self.tavern_label.setFixedHeight(45)
+        self.tavern_label.setMinimumHeight(32)
+        self.tavern_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         info_layout.addWidget(self.tavern_label)
 
         # Set Destination Info
@@ -1404,7 +1550,8 @@ class RBCCommunityMap(QMainWindow):
         self.destination_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.destination_label.setStyleSheet(label_style.format(color="green"))
         self.destination_label.setWordWrap(True)
-        self.destination_label.setFixedHeight(45)
+        self.destination_label.setMinimumHeight(32)
+        self.destination_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         info_layout.addWidget(self.destination_label)
 
         # Transit-Based AP for Set Destination Info
@@ -1412,7 +1559,8 @@ class RBCCommunityMap(QMainWindow):
         self.transit_destination_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.transit_destination_label.setStyleSheet(label_style.format(color="purple"))
         self.transit_destination_label.setWordWrap(True)
-        self.transit_destination_label.setFixedHeight(45)
+        self.transit_destination_label.setMinimumHeight(32)
+        self.transit_destination_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         info_layout.addWidget(self.transit_destination_label)
 
         # ComboBox and Go Button
@@ -1550,14 +1698,27 @@ class RBCCommunityMap(QMainWindow):
         character_buttons_layout.addWidget(delete_button)
         character_layout.addLayout(character_buttons_layout)
 
-        left_layout.addWidget(character_frame)
+        left_layout.addWidget(character_frame, stretch=1)
 
-        # Add the webview_container and left_frame to the map layout
-        map_layout.addWidget(left_frame)
-        map_layout.addWidget(webview_container, stretch=1)
+        # Let the user resize the navigation width while the panel height and
+        # browser area follow the window geometry automatically.
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(left_frame)
+        splitter.addWidget(webview_container)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([300, 900])
+        self.main_splitter = splitter
+        self._navigation_resize_timer = QTimer(self)
+        self._navigation_resize_timer.setSingleShot(True)
+        self._navigation_resize_timer.timeout.connect(self._update_navigation_sizes)
+        splitter.splitterMoved.connect(lambda *_args: self._schedule_navigation_resize())
+        map_layout.addWidget(splitter)
 
         # Make sure the webview expands to fill the remaining space
         self.website_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._update_navigation_sizes()
 
         # Directly process coins from HTML within `process_html`
         if self.selected_character:
@@ -1634,10 +1795,6 @@ class RBCCommunityMap(QMainWindow):
         self.reporting_action.setChecked(bool(self.location_reporting_enabled))
         self.reporting_action.toggled.connect(self.toggle_location_reporting)
         settings_menu.addAction(self.reporting_action)
-
-        credit_action = PySide6.QtGui.QAction('Set Contribution Credit…', self)
-        credit_action.triggered.connect(self.prompt_report_credit)
-        settings_menu.addAction(credit_action)
 
         zoom_in_action = PySide6.QtGui.QAction('Zoom In', self)
         zoom_in_action.triggered.connect(self.zoom_in_browser)
@@ -1924,19 +2081,18 @@ class RBCCommunityMap(QMainWindow):
         - Windows: .chm file
         - macOS/Linux: .html file
         """
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        help_dir = os.path.join(base_dir, "docs", "help")
+        help_dir = APP_DIR / "docs" / "help"
         system = platform.system()
 
         if system == "Windows":
-            help_path = os.path.join(help_dir, "RBC Community Map Help.chm")
-            if os.path.exists(help_path):
-                os.startfile(help_path)
+            help_path = help_dir / "RBC Community Map Help.chm"
+            if help_path.exists():
+                os.startfile(str(help_path))
                 return
         else:
-            html_path = os.path.join(help_dir, "RBC_Map_Help.html")
-            if os.path.exists(html_path):
-                webbrowser.open(f"file://{html_path}")
+            html_path = help_dir / "RBC_Map_Help.html"
+            if html_path.exists():
+                webbrowser.open(html_path.as_uri())
                 return
 
         # If neither file is found
@@ -1958,9 +2114,14 @@ class RBCCommunityMap(QMainWindow):
             cursor.execute("SELECT id, name, password FROM characters")
             character_data = cursor.fetchall()
             self.characters = [
-                {'id': char_id, 'name': name, 'password': password}
+                {
+                    'id': char_id,
+                    'name': name,
+                    'password': load_character_secret(connection, char_id, password),
+                }
                 for char_id, name, password in character_data
             ]
+            vacuum_migrated_secrets(connection)
 
             self.character_list.clear()
             for character in self.characters:
@@ -1988,11 +2149,24 @@ class RBCCommunityMap(QMainWindow):
             connection = sqlite3.connect(DB_PATH)
             cursor = connection.cursor()
             for character in self.characters:
-                cursor.execute('''
-                    INSERT OR REPLACE INTO characters (id, name, password) VALUES (?, ?, ?)
-                ''', (character.get('id'), character['name'], character['password']))
+                if character.get('password'):
+                    stored_password = store_character_secret(character['id'], character['password'])
+                    cursor.execute(
+                        "UPDATE characters SET name = ?, password = ? WHERE id = ?",
+                        (character['name'], stored_password, character['id']),
+                    )
+                else:
+                    # Preserve the legacy value when the keyring is unavailable;
+                    # never turn an unknown credential into NULL during a save.
+                    cursor.execute(
+                        "UPDATE characters SET name = ? WHERE id = ?",
+                        (character['name'], character['id']),
+                    )
             connection.commit()
-            logging.debug("Characters saved successfully to the database in plaintext.")
+            logging.debug("Characters saved successfully.")
+        except CredentialStoreError as e:
+            logging.error(f"Failed to save character credentials: {e}")
+            QMessageBox.critical(self, "Credential Storage Error", str(e))
         except sqlite3.Error as e:
             logging.error(f"Failed to save characters to database: {e}")
             QMessageBox.critical(self, "Error", f"Failed to save characters: {e}")
@@ -2036,7 +2210,7 @@ class RBCCommunityMap(QMainWindow):
 
         # Mark destination and login to be handled on next page load
         self.pending_character_id_for_map = character_id
-        self.pending_login = True
+        self._queue_password_login(character_name)
         self.save_last_active_character(character_id)
         self.load_last_destination_for_character(character_id)
         self.update_minimap()
@@ -2052,7 +2226,7 @@ class RBCCommunityMap(QMainWindow):
             with sqlite3.connect(DB_PATH) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT c.active_cookie, k.value 
+                    SELECT c.active_cookie, k.name, k.domain, k.path, k.value
                     FROM characters c
                     JOIN cookies k ON c.active_cookie = k.id
                     WHERE c.name = ?
@@ -2061,34 +2235,89 @@ class RBCCommunityMap(QMainWindow):
 
                 if not row:
                     logging.error(f"No saved login cookie found for character '{character_name}'.")
+                    self._pending_cookie_character = None
+                    self._pending_cookie_request_id = None
+                    self._queue_password_login(character_name)
+                    self.website_frame.setUrl(QUrl("https://quiz.ravenblack.net/blood.pl?action=logout"))
                     return
 
-                cookie_id, cookie_value = row
+                cookie_id, cookie_name, cookie_domain, cookie_path, stored_value = row
+                cookie_value = load_cookie_secret(
+                    conn, cookie_id, cookie_name, cookie_domain, cookie_path, stored_value
+                )
+                if cookie_value is None:
+                    logging.error("No credential-store value found for cookie ID %s", cookie_id)
+                    self._pending_cookie_character = None
+                    self._pending_cookie_request_id = None
+                    self._queue_password_login(character_name)
+                    self.website_frame.setUrl(QUrl("https://quiz.ravenblack.net/blood.pl?action=logout"))
+                    return
 
                 ip_cookie = QNetworkCookie(b'ip', cookie_value.encode('utf-8'))
                 ip_cookie.setDomain('quiz.ravenblack.net')
                 ip_cookie.setPath('/')
                 ip_cookie.setExpirationDate(QDateTime.currentDateTime().addDays(30))
 
+                self.pending_login = False
+                self._pending_login_character = None
+                self._login_retry_count = 0
+                self._login_request_id += 1
+                self._pending_cookie_character = character_name
+                self._pending_cookie_request_id = self._login_request_id
                 self.cookie_store.setCookie(ip_cookie, QUrl("https://quiz.ravenblack.net"))
                 logging.debug(f"Injected saved 'ip' cookie ID {cookie_id} for {character_name}.")
 
                 # Reload page after injecting cookie
                 self.website_frame.setUrl(QUrl("https://quiz.ravenblack.net/blood.pl"))
 
-        except sqlite3.Error as e:
+        except (CredentialStoreError, sqlite3.Error) as e:
             logging.error(f"Failed to switch character '{character_name}': {e}")
 
-    def login_selected_character(self) -> None:
-        """
-        Auto-login via JS injection (existing behavior), but with a safe default
-        for auto_login_enabled so refactors don't crash.
+    def _handle_cookie_login_page(self, request_id: int, character_name: str, is_login_form: bool) -> None:
+        """Fall back to password login when a saved cookie was rejected."""
+        if (
+            request_id != self._pending_cookie_request_id
+            or character_name != self._pending_cookie_character
+        ):
+            return
+
+        self._pending_cookie_character = None
+        self._pending_cookie_request_id = None
+        if is_login_form:
+            logging.info("Saved cookie was rejected for '%s'; using password login", character_name)
+            self._queue_password_login(character_name)
+            self.login_selected_character()
+
+    def _queue_password_login(self, character_name: str) -> None:
+        """Queue a password login and invalidate all earlier async attempts."""
+        self._login_request_id += 1
+        self.pending_login = True
+        self._pending_login_character = character_name
+        self._login_retry_count = 0
+        self._pending_cookie_character = None
+        self._pending_cookie_request_id = None
+
+    def login_selected_character(self, request_id=None) -> None:
+        """Auto-fill and submit the RavenBlack login form for the selected character.
+
+        Injects a small JavaScript snippet into the loaded page that populates the
+        username/password fields and submits the login form. Values are embedded
+        with ``json.dumps`` so a name or password cannot break out of the JS string
+        literals. No-ops safely when auto-login is disabled, no character is
+        selected, or the webview is not ready.
         """
         try:
-            # Default to True to preserve the current 0.13.3 behavior
-            # (your log shows JS injection is happening successfully).
+            # Default to True so a missing attribute doesn't silently disable login.
             if not getattr(self, "auto_login_enabled", True):
                 logging.info("Auto-login disabled; skipping login injection.")
+                return
+
+            if not getattr(self, "pending_login", False):
+                logging.debug("No pending password login; skipping login injection.")
+                return
+
+            if request_id is not None and request_id != self._login_request_id:
+                logging.debug("Ignoring stale auto-login request %s", request_id)
                 return
 
             if not getattr(self, "selected_character", None):
@@ -2099,8 +2328,6 @@ class RBCCommunityMap(QMainWindow):
                 logging.debug("website_frame not ready; skipping login.")
                 return
 
-            # ---- Your existing JS injection logic should remain below ----
-            # Keep whatever you already have for safe JS construction (json.dumps, etc.)
             logging.debug("Logging in selected character via JS injection...")
 
             name = self.selected_character.get("name")
@@ -2110,36 +2337,61 @@ class RBCCommunityMap(QMainWindow):
                 logging.debug("Selected character missing name/password; skipping login.")
                 return
 
-            # If you already have a helper that builds JS, keep using it.
-            # Below is a safe generic pattern; replace with your existing script if different.
+            pending_name = getattr(self, "_pending_login_character", None)
+            if self.pending_login and pending_name and pending_name != name:
+                logging.debug("Ignoring stale auto-login request for '%s'", pending_name)
+                return
+
+            # Embed credentials via json.dumps so they are always valid, escaped
+            # JS string literals (guards against quotes/backslashes in the values).
             import json
             js = f"""
             (function() {{
                 try {{
                     const u = {json.dumps(name)};
                     const p = {json.dumps(password)};
-                    const user = document.querySelector('input[name="username"]');
-                    const pass = document.querySelector('input[name="password"]');
-                    if (!user || !pass) return "Login fields not found";
+                    const login = {LOGIN_FORM_FINDER_JS};
+                    if (!login) return "Login fields not found";
+                    const {{form, user, pass}} = login;
                     user.value = u;
                     pass.value = p;
-                    const form = user.closest('form');
-                    if (form) {{ form.submit(); return "Login submitted"; }}
-                    const btn = document.querySelector('input[type="submit"], button[type="submit"]');
-                    if (btn) {{ btn.click(); return "Login clicked"; }}
-                    return "No form/submit found";
+                    form.submit();
+                    return "Login submitted";
                 }} catch (e) {{
                     return "Login JS error: " + e;
                 }}
             }})();
             """
-            self.website_frame.page().runJavaScript(js, lambda result: logging.debug(f"Login result: {result}"))
+            request_id = self._login_request_id
+
+            def handle_login_result(result):
+                if request_id != self._login_request_id:
+                    logging.debug("Ignoring stale auto-login result for request %s", request_id)
+                    return
+                if not self.pending_login or self._pending_login_character != name:
+                    logging.debug("Ignoring auto-login result for inactive character '%s'", name)
+                    return
+                logging.debug(f"Login result: {result}")
+                if result in ("Login submitted", "Login clicked"):
+                    self.pending_login = False
+                    self._pending_login_character = None
+                    self._login_retry_count = 0
+                elif self.pending_login and self._login_retry_count < 10:
+                    self._login_retry_count += 1
+                    QTimer.singleShot(
+                        500,
+                        lambda request_id=request_id: self.login_selected_character(request_id),
+                    )
+                elif self.pending_login:
+                    logging.warning("Login form was not ready before the auto-login retry limit")
+
+            self.website_frame.page().runJavaScript(js, handle_login_result)
         except Exception as e:
             logging.exception(f"login_selected_character failed: {e}")
 
     def firstrun_character_creation(self):
         """
-        Handles the first-run character creation, saving the character in plaintext,
+        Handles the first-run character creation, saving the character credential in the OS store,
         initializing default coin values in the coins table, and setting this character as the last active.
         Then injects login form to let the server issue a valid IP cookie.
         """
@@ -2149,11 +2401,15 @@ class RBCCommunityMap(QMainWindow):
         if dialog.exec():
             name = dialog.name_edit.text()
             password = dialog.password_edit.text()
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                try:
-                    cursor.execute('INSERT INTO characters (name, password) VALUES (?, ?)', (name, password))
+            try:
+                with sqlite3.connect(DB_PATH) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        'INSERT INTO characters (name, password) VALUES (?, ?)',
+                        (name, password if SQLITE_CREDENTIAL_STORAGE else None),
+                    )
                     character_id = cursor.lastrowid
+                    store_character_secret(character_id, password)
                     cursor.execute('INSERT INTO coins (character_id, pocket, bank) VALUES (?, 0, 0)', (character_id,))
                     conn.commit()
 
@@ -2169,13 +2425,15 @@ class RBCCommunityMap(QMainWindow):
                     # Select and login to generate cookie
                     self.selected_character = character
                     self.character_list.setCurrentRow(self.character_list.count() - 1)
-                    QTimer.singleShot(1000, self.login_selected_character)
+                    self._queue_password_login(name)
+                    if hasattr(self, "website_frame"):
+                        self.website_frame.setUrl(QUrl("https://quiz.ravenblack.net/blood.pl"))
 
                     logging.debug(f"First-run character '{name}' created and login initiated.")
 
-                except sqlite3.Error as e:
-                    logging.error(f"Failed to create character '{name}': {e}")
-                    QMessageBox.critical(self, "Error", f"Failed to create character: {e}")
+            except (CredentialStoreError, sqlite3.Error) as e:
+                logging.error(f"Failed to create character '{name}': {e}")
+                QMessageBox.critical(self, "Credential Storage Error", f"Failed to create character: {e}")
         else:
             sys.exit("No characters added. Exiting the application.")
 
@@ -2192,11 +2450,15 @@ class RBCCommunityMap(QMainWindow):
         name = dialog.name_edit.text().strip()
         password = dialog.password_edit.text().strip()
 
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute('INSERT INTO characters (name, password) VALUES (?, ?)', (name, password))
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'INSERT INTO characters (name, password) VALUES (?, ?)',
+                    (name, password if SQLITE_CREDENTIAL_STORAGE else None),
+                )
                 character_id = cursor.lastrowid
+                store_character_secret(character_id, password)
                 cursor.execute('INSERT INTO coins (character_id, pocket, bank) VALUES (?, 0, 0)', (character_id,))
                 conn.commit()
 
@@ -2209,20 +2471,18 @@ class RBCCommunityMap(QMainWindow):
                 self.selected_character = character
                 self.character_list.setCurrentRow(self.character_list.count() - 1)
                 self.save_last_active_character(character_id)
+                self._queue_password_login(name)
 
                 logging.debug(f"New character '{name}' added and selected. Logging out current user...")
 
                 # 🚪 Force logout and prepare for JS login
                 self.website_frame.setUrl(QUrl('https://quiz.ravenblack.net/blood.pl?action=logout'))
 
-                def delayed_login():
-                    self.login_selected_character()
+                # The load-finished handler retries until the login form is ready.
 
-                QTimer.singleShot(1500, delayed_login)
-
-            except sqlite3.Error as e:
-                logging.error(f"Failed to add character '{name}': {e}")
-                QMessageBox.critical(self, "Error", f"Failed to add character: {e}")
+        except (CredentialStoreError, sqlite3.Error) as e:
+            logging.error(f"Failed to add character '{name}': {e}")
+            QMessageBox.critical(self, "Credential Storage Error", f"Failed to add character: {e}")
 
     def modify_character(self):
         """
@@ -2252,13 +2512,42 @@ class RBCCommunityMap(QMainWindow):
             QMessageBox.warning(self, "Validation Error", "Character name and password cannot be empty.")
             return  # 🚨 Do not proceed if fields are blank
 
+        secret_changed = False
+        password_changed = new_password != character.get("password")
+        active_cookie_id = None
         try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE characters SET name = ?, password = ? WHERE id = ?
-                """, (new_name, new_password, character['id']))
+            old_password = None
+            if not SQLITE_CREDENTIAL_STORAGE:
+                old_password = get_secret(CHARACTER_SECRET_NAMESPACE, character_secret_id(character['id']))
+            # Lock the database before changing the keyring so a failed write
+            # cannot leave the keyring ahead of the committed character row.
+            with sqlite3.connect(DB_PATH, timeout=10) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                active_cookie_row = conn.execute(
+                    "SELECT active_cookie FROM characters WHERE id = ?",
+                    (character['id'],),
+                ).fetchone()
+                active_cookie_id = active_cookie_row[0] if active_cookie_row else None
+                stored_password = store_character_secret(character['id'], new_password)
+                secret_changed = not SQLITE_CREDENTIAL_STORAGE
+                conn.execute("""
+                    UPDATE characters SET name = ?, password = ?,
+                        active_cookie = CASE WHEN ? THEN NULL ELSE active_cookie END
+                    WHERE id = ?
+                """, (new_name, stored_password, password_changed, character['id']))
+                if SQLITE_CREDENTIAL_STORAGE and password_changed and active_cookie_id is not None:
+                    conn.execute("UPDATE cookies SET value = NULL WHERE id = ?", (active_cookie_id,))
                 conn.commit()
+
+            if password_changed and active_cookie_id is not None and not SQLITE_CREDENTIAL_STORAGE:
+                try:
+                    delete_secret(COOKIE_SECRET_NAMESPACE, cookie_secret_id(active_cookie_id))
+                except CredentialStoreError as cleanup_error:
+                    logging.warning(
+                        "Password changed for '%s', but old cookie cleanup failed: %s",
+                        new_name,
+                        cleanup_error,
+                    )
 
             # Update in-memory character and UI
             character['name'] = new_name
@@ -2268,9 +2557,25 @@ class RBCCommunityMap(QMainWindow):
 
             logging.debug(f"Character '{new_name}' modified successfully.")
 
-        except sqlite3.Error as e:
+        except (CredentialStoreError, sqlite3.Error) as e:
+            if secret_changed:
+                try:
+                    if old_password is None:
+                        delete_secret(CHARACTER_SECRET_NAMESPACE, character_secret_id(character['id']))
+                    else:
+                        set_secret(
+                            CHARACTER_SECRET_NAMESPACE,
+                            character_secret_id(character['id']),
+                            old_password,
+                        )
+                except CredentialStoreError as restore_error:
+                    logging.error(
+                        "Failed to restore character %s password after rejected edit: %s",
+                        character['id'],
+                        restore_error,
+                    )
             logging.error(f"Failed to modify character '{name}': {e}")
-            QMessageBox.critical(self, "Error", f"Failed to modify character: {e}")
+            QMessageBox.critical(self, "Credential Storage Error", f"Failed to modify character: {e}")
 
     def delete_character(self):
         """Delete the selected character from the list."""
@@ -2292,9 +2597,16 @@ class RBCCommunityMap(QMainWindow):
                 cursor.execute("DELETE FROM characters WHERE id = ?", (char_id,))
                 conn.commit()
                 logging.debug(f"Character ID {char_id} deleted from database.")
-        except sqlite3.Error as e:
+        except (CredentialStoreError, sqlite3.Error) as e:
             logging.error(f"Failed to delete character ID {char_id} from database: {e}")
+            QMessageBox.critical(self, "Credential Storage Error", f"Failed to delete character: {e}")
             return
+
+        try:
+            if not SQLITE_CREDENTIAL_STORAGE:
+                delete_secret(CHARACTER_SECRET_NAMESPACE, character_secret_id(char_id))
+        except CredentialStoreError as e:
+            logging.warning("Character %s was deleted but its keyring entry remains: %s", char_id, e)
 
         # Then update in-memory list and UI
         self.characters = [char for char in self.characters if char['id'] != char_id]
@@ -2347,12 +2659,6 @@ class RBCCommunityMap(QMainWindow):
                         # ✅ Inject correct cookie for selected character
                         self.switch_to_character(self.selected_character['name'])
 
-                        # ✅ After injecting cookie, navigate and login
-                        def delayed_login():
-                            self.login_selected_character()
-
-                        QTimer.singleShot(1500, delayed_login)
-
                     else:
                         logging.warning(f"Last active character ID '{character_id}' not found in character list.")
                         self.set_default_character()
@@ -2375,8 +2681,10 @@ class RBCCommunityMap(QMainWindow):
             self.character_list.setCurrentRow(0)
             logging.debug(f"No valid last active character; defaulting to: {self.selected_character['name']}")
             self.save_last_active_character(self.selected_character['id'])
-
-            self.website_frame.setUrl(QUrl('https://quiz.ravenblack.net/blood.pl'))
+            self.load_last_destination_for_character(self.selected_character['id'])
+            self.update_minimap()
+            self._queue_password_login(self.selected_character['name'])
+            self.switch_to_character(self.selected_character['name'])
         else:
             self.selected_character = None
             logging.warning("No characters available to set as default.")
@@ -2455,10 +2763,18 @@ class RBCCommunityMap(QMainWindow):
         css = self.load_current_css()
         self.apply_custom_css(css)
 
-        if self.login_needed:
+        if self._pending_cookie_character:
+            request_id = self._pending_cookie_request_id
+            character_name = self._pending_cookie_character
+            self.website_frame.page().runJavaScript(
+                f"Boolean({LOGIN_FORM_FINDER_JS})",
+                lambda is_login_form, request_id=request_id, character_name=character_name:
+                    self._handle_cookie_login_page(request_id, character_name, bool(is_login_form)),
+            )
+
+        if self.pending_login:
             logging.debug("Logging in selected character via JS injection...")
             self.login_selected_character()
-            self.pending_login = False
             return
 
         if self.pending_character_id_for_map:
@@ -2790,7 +3106,7 @@ class RBCCommunityMap(QMainWindow):
     def switch_css_profile(self, profile_name: str) -> None:
         self.current_css_profile = profile_name
         self.apply_custom_css()
-        # Re-resolve colors (defaults < new CSS < user overrides) and repaint.
+        # Minimap colors and the whole-app theme follow the active CSS.
         self.apply_minimap_colors_from_css()
         self.apply_ui_theme_from_css()
         self.apply_theme()
@@ -2846,9 +3162,8 @@ class RBCCommunityMap(QMainWindow):
             if not name:
                 continue
 
-            # Special curated Places of Interest must not leak into the regular
-            # shops/userbuildings tables (e.g. Cloister of Secrets is a fixed
-            # shop; Kindred Hospital is a lair).
+            # These fixed POIs are curated locally and must not be learned as
+            # ordinary shops/lairs or reported as crowdsourced locations.
             if self._is_curated_poi(cls, name, el):
                 continue
 
@@ -2918,43 +3233,35 @@ class RBCCommunityMap(QMainWindow):
         if override:
             return override
         raw = el.get_text(" ", strip=True) or (el.get("title") or "")
+        if cls == "transit":
+            raw = re.sub(r"\s+Station\s*$", "", raw, flags=re.IGNORECASE)
         return self.normalize_building_name(raw)
-
-    # Special Places of Interest that are curated locally, not crowdsourced.
-    _CURATED_POI_NAME_MARKERS = ("kindred hospital", "cloister of secrets", "requiem of hades")
-
-    def _is_curated_poi(self, cls: str, name: str, el) -> bool:
-        """True for special POI that must stay curated in placesofinterest.
-
-        Battle Arena / Graveyard / Eternal Aubade already route to
-        placesofinterest via their span class, so they are fine. The two that
-        would otherwise leak are Cloister of Secrets (a fixed ``<!--nomove-->``
-        shop) and Kindred Hospital (a lair) - skip those by marker/name so they
-        are not learned into the shops/userbuildings tables or reported.
-        """
-        low = (name or "").lower()
-        if any(marker in low for marker in self._CURATED_POI_NAME_MARKERS):
-            return True
-        # Any fixed (non-moving) shop is a curated location, not a mover shop.
-        if cls == "shop":
-            try:
-                if "nomove" in str(el).lower():
-                    return True
-            except Exception:
-                pass
-        return False
 
     def normalize_building_name(self, s: str) -> str:
         s = (s or "").strip()
         s = re.sub(r"\s+", " ", s)
         s = s.replace("’", "'").replace("`", "'")
-        # If you already have nickname→canon mapping, use it:
+        # Apply the nickname->canonical mapping when the app provides one.
         if hasattr(self, "_nickname_to_canon"):
             try:
                 return self._nickname_to_canon(s)
             except Exception:
                 pass
         return s
+
+    _CURATED_POI_NAME_MARKERS = ("kindred hospital", "cloister of secrets", "requiem of hades")
+
+    def _is_curated_poi(self, cls: str, name: str, el) -> bool:
+        """Return whether a visible fixed POI should remain locally curated."""
+        low = (name or "").lower()
+        if any(marker in low for marker in self._CURATED_POI_NAME_MARKERS):
+            return True
+        if cls == "shop":
+            try:
+                return "nomove" in str(el).lower()
+            except Exception:
+                return False
+        return False
 
     def _upsert_building(self, cur: sqlite3.Cursor, cls: str, name: str, col: str, row: str) -> str | None:
         """Insert or update a learned building; return the action taken.
@@ -2977,8 +3284,34 @@ class RBCCommunityMap(QMainWindow):
         mapping = BUILDING_CLASS_MAP[cls]
         table = mapping["table"]
         name_col = mapping["name_col"]
+        if cls == "transit":
+            name = re.sub(r"\s+Station\s*$", "", name, flags=re.IGNORECASE).strip()
 
         if table in ("banks", "taverns", "transits", "placesofinterest", "userbuildings"):
+            if cls == "transit":
+                # There is only one transit station per map cell.  Older
+                # observations may have stored both "Calliope" and
+                # "Calliope Station"; retain one canonical row when a new
+                # observation arrives at that cell.
+                cur.execute(
+                    f"SELECT ID, {name_col} FROM {table} WHERE `Column`=? AND Row=? ORDER BY ID",
+                    (col, row),
+                )
+                existing = cur.fetchall()
+                if existing:
+                    matching = next((entry for entry in existing if entry[1] == name), None)
+                    keep_id = matching[0] if matching else existing[0][0]
+                    if not matching or len(existing) > 1:
+                        cur.execute(
+                            f"UPDATE {table} SET {name_col}=? WHERE ID=?",
+                            (name, keep_id),
+                        )
+                        cur.execute(
+                            f"DELETE FROM {table} WHERE `Column`=? AND Row=? AND ID<>?",
+                            (col, row, keep_id),
+                        )
+                        return "updated"
+                    return None
             cur.execute(f"SELECT 1 FROM {table} WHERE `Column`=? AND Row=? AND {name_col}=?", (col, row, name))
             if cur.fetchone():
                 return None
@@ -3020,8 +3353,7 @@ class RBCCommunityMap(QMainWindow):
         raised) - the location will simply be re-sent the next time it is seen.
 
         Only building kind/name/coordinates and an anonymous ``client_id`` are
-        sent - never character, position, or coins. See
-        docs/crowdsourced-location-reporting.md.
+        sent - never character, position, or coins.
         """
         if not reports or not self.location_reporting_enabled:
             return
@@ -3036,7 +3368,6 @@ class RBCCommunityMap(QMainWindow):
                     "row": r["row"],
                     "observed_at": observed_at,
                     "client_id": self.client_id,
-                    "credit": self.report_credit,
                     "app_version": VERSION_NUMBER,
                 }
                 for r in reports
@@ -3063,6 +3394,14 @@ class RBCCommunityMap(QMainWindow):
         """
         Draws the minimap with various features such as special locations and lines to nearest locations,
         with cell lines and dynamically scaled text size.
+
+        Use top-left-origin, Y-down screen coordinates: columns/X increase
+        right/east and rows/Y increase down/south. Convert map coordinates to
+        viewport pixels with x = (column - column_start) * block_size and
+        y = (row - row_start) * block_size. Thus (column_start, row_start)
+        maps to the minimap's top-left pixel (0, 0); do not invert the Y axis
+        as in Cartesian positive-Y-up coordinates. Preserve existing street
+        and building offsets when applying these conversions.
         """
         pixmap = PySide6.QtGui.QPixmap(self.minimap_size, self.minimap_size)
         painter = PySide6.QtGui.QPainter(pixmap)
@@ -3116,9 +3455,10 @@ class RBCCommunityMap(QMainWindow):
 
         def draw_label_box(x, y, width, base_height, bg_color, text, style_key=None):
             """
-            Draws a building marker: the building icon filling the cell with the
-            name as a caption strip when an icon exists for ``style_key``;
-            otherwise (intersections, or a missing icon) the classic colored box.
+            Draws a building marker. When an icon exists for ``style_key`` the
+            cell shows the building artwork with the name as a caption strip;
+            otherwise (intersections, or a missing icon) it falls back to the
+            classic colored text box.
             """
             icon_key = icon_for_style.get(style_key)
             pixmap = self.map_icons.get(icon_key) if icon_key else None
@@ -3222,16 +3562,28 @@ class RBCCommunityMap(QMainWindow):
                 # Draw cell background color to match in-game city grid
                 if column_index < 1 or column_index > 200 or row_index < 1 or row_index > 200:
                     # Map edges (border)
-                    painter.fillRect(x0 + border_size, y0 + border_size, block_size - 2 * border_size,
-                                     block_size - 2 * border_size, PySide6.QtGui.QColor(self.color_mappings["edge"]))
+                    rect = QRect(x0 + border_size, y0 + border_size, block_size - 2 * border_size, block_size - 2 * border_size)
+                    texture = self.minimap_texture_pixmaps.get("edge")
+                    if texture:
+                        painter.drawTiledPixmap(rect, texture)
+                    else:
+                        painter.fillRect(rect, PySide6.QtGui.QColor(self.color_mappings["edge"]))
                 elif column_index % 2 == 0 or row_index % 2 == 0:
                     # If either coordinate is even → Streets (Gray)
-                    painter.fillRect(x0 + border_size, y0 + border_size, block_size - 2 * border_size,
-                                     block_size - 2 * border_size, PySide6.QtGui.QColor(self.color_mappings["street"]))
+                    rect = QRect(x0 + border_size, y0 + border_size, block_size - 2 * border_size, block_size - 2 * border_size)
+                    texture = self.minimap_texture_pixmaps.get("street")
+                    if texture:
+                        painter.drawTiledPixmap(rect, texture)
+                    else:
+                        painter.fillRect(rect, PySide6.QtGui.QColor(self.color_mappings["street"]))
                 else:
                     # Both coordinates odd → City Blocks (Black)
-                    painter.fillRect(x0 + border_size, y0 + border_size, block_size - 2 * border_size,
-                                     block_size - 2 * border_size, PySide6.QtGui.QColor(self.color_mappings["alley"]))
+                    rect = QRect(x0 + border_size, y0 + border_size, block_size - 2 * border_size, block_size - 2 * border_size)
+                    texture = self.minimap_texture_pixmaps.get("alley")
+                    if texture:
+                        painter.drawTiledPixmap(rect, texture)
+                    else:
+                        painter.fillRect(rect, PySide6.QtGui.QColor(self.color_mappings["alley"]))
 
                 if column_name and row_name:
                     label_text = f"{column_name} & {row_name}"
@@ -3390,7 +3742,7 @@ class RBCCommunityMap(QMainWindow):
             # Draw nearest tavern line
             if nearest_tavern:
                 nearest_tavern_coords = nearest_tavern[0][1]
-                painter.setPen(PySide6.QtGui.QPen(PySide6.QtGui.QColor('orange'), 3))
+                painter.setPen(PySide6.QtGui.QPen(self.minimap_route_colors.get("tavern", PySide6.QtGui.QColor('orange')), 3))
                 painter.drawLine(
                     (current_x - self.column_start) * block_size + block_size // 2,
                     (current_y - self.row_start) * block_size + block_size // 2,
@@ -3401,7 +3753,7 @@ class RBCCommunityMap(QMainWindow):
             # Draw nearest bank line
             if nearest_bank:
                 nearest_bank_coords = nearest_bank  # Already a (col, row) tuple
-                painter.setPen(PySide6.QtGui.QPen(PySide6.QtGui.QColor('blue'), 3))
+                painter.setPen(PySide6.QtGui.QPen(self.minimap_route_colors.get("bank", PySide6.QtGui.QColor('blue')), 3))
                 painter.drawLine(
                     (current_x - self.column_start) * block_size + block_size // 2,
                     (current_y - self.row_start) * block_size + block_size // 2,
@@ -3412,7 +3764,7 @@ class RBCCommunityMap(QMainWindow):
             # Draw nearest transit line
             if nearest_transit:
                 nearest_transit_coords = nearest_transit[0][1]
-                painter.setPen(PySide6.QtGui.QPen(PySide6.QtGui.QColor('red'), 3))
+                painter.setPen(PySide6.QtGui.QPen(self.minimap_route_colors.get("transit", PySide6.QtGui.QColor('red')), 3))
                 painter.drawLine(
                     (current_x - self.column_start) * block_size + block_size // 2,
                     (current_y - self.row_start) * block_size + block_size // 2,
@@ -3429,7 +3781,7 @@ class RBCCommunityMap(QMainWindow):
             ):
                 logging.debug(
                     f"Drawing direct route from {self.selected_route_path[0]} to {self.selected_route_path[-1]}")
-                painter.setPen(PySide6.QtGui.QPen(PySide6.QtGui.QColor("green"), 3))
+                painter.setPen(PySide6.QtGui.QPen(self.minimap_route_colors.get("direct", PySide6.QtGui.QColor("green")), 3))
                 x1, y1 = self.selected_route_path[0]
                 x2, y2 = self.selected_route_path[-1]
                 painter.drawLine(
@@ -3447,7 +3799,7 @@ class RBCCommunityMap(QMainWindow):
                     len(self.selected_route_path) >= 2
             ):
                 logging.debug(f"Transit route path: {self.selected_route_path}")
-                painter.setPen(PySide6.QtGui.QPen(PySide6.QtGui.QColor(170, 0, 170), 3))
+                painter.setPen(PySide6.QtGui.QPen(self.minimap_route_colors.get("transit_route", PySide6.QtGui.QColor(170, 0, 170)), 3))
 
                 # Current player position
                 current_x, current_y = self.column_start + self.zoom_level // 2, self.row_start + self.zoom_level // 2
@@ -3808,7 +4160,7 @@ class RBCCommunityMap(QMainWindow):
         dialog = SetDestinationDialog(self)
 
         # Execute dialog and check for acceptance
-        if dialog.exec() == QDialog.accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             # Load the newly set destination from the database
             self.load_destination()
 
@@ -4118,7 +4470,7 @@ class RBCCommunityMap(QMainWindow):
             QMessageBox.critical(self, "Error", f"Error opening Database Viewer: {e}")
 
     def open_log_viewer(self):
-        self.log_viewer = LogViewer(self, LOG_DIR)  # or pass None if you want it fully standalone
+        self.log_viewer = LogViewer(self, LOG_DIR)
         self.log_viewer.show()
 
     def fetch_table_data(self, cursor, table_name):
@@ -4231,7 +4583,7 @@ class RBCCommunityMap(QMainWindow):
         self.selected_route_path = path_coords
         self.ap_direction_label.setText(f"Compass: {direction_desc}")
 
-        # Close the overlay if you want to force refresh focus
+        # Close the compass overlay so focus returns to the main window.
         if hasattr(self, 'compass_overlay'):
             self.compass_overlay.close()
 
@@ -4239,8 +4591,11 @@ class RBCCommunityMap(QMainWindow):
 
     def update_data(self):
         """
-        Securely triggers the bot to update locations.json using the refresh API
-        flow, waits for completion, and then updates the local database.
+        Securely triggers the bot to update locations.json using the token-based API flow,
+        waits for completion, and then updates the local database.
+
+        Returns:
+            bool: True when the refresh and local merge succeed; otherwise False.
         """
         try:
             # Runs on the UI thread, so cap both the legacy blind wait and the
@@ -4261,31 +4616,132 @@ class RBCCommunityMap(QMainWindow):
             # cooldown, so always pull them; then refresh the map in one pass.
             self.fetch_and_merge_community_buildings(timeout=5)
             self.refresh_map_data_from_db()
+            return True
 
         except requests.exceptions.RequestException as e:
             logging.error(f"Update error: {e}")
             QMessageBox.critical(self, "Network Error", f"An error occurred:\n{e}")
+            return False
         except Exception as e:
             logging.error(f"Unexpected error during update: {e}")
             QMessageBox.critical(self, "Error", str(e))
+            return False
 
-    def get_locations_last_updated(self) -> str | None:
-        """Return the server ``last_updated`` value stored at our last write.
-
-        This is the authoritative "which generation of bot data do we hold"
-        marker (the server's own timestamp, not our local write time), used to
-        decide whether a /refresh "cooldown" response is actually newer than
-        what we already have. Returns ``None`` if we have never stored one.
+    def update_database_with_json(self, data):
+        """
+        Updates the local shops and guilds tables based on the JSON structure from the bot,
+        while preserving Peacekeeper's Missions.
         """
         try:
             with sqlite3.connect(DB_PATH) as conn:
-                row = conn.cursor().execute(
-                    "SELECT setting_value FROM settings WHERE setting_name = 'locations_last_updated'"
-                ).fetchone()
-                return row[0] if row and row[0] else None
+                cursor = conn.cursor()
+
+                scrape_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+                guilds_next = data.get("guilds_next_update")
+                shops_next = data.get("shops_next_update")
+                server_last_updated = data.get("last_updated")
+
+                # Clear old locations except Peacekeepers
+                cursor.execute("""
+                    UPDATE guilds
+                    SET `Column` = 'NA', `Row` = 'NA', `next_update` = ?, `last_scraped` = ?
+                    WHERE Name NOT LIKE 'Peacekeepers Mission%'""",
+                               (guilds_next, scrape_timestamp)
+                               )
+                cursor.execute("""
+                    UPDATE shops
+                    SET `Column` = 'NA', `Row` = 'NA', `next_update` = ?, `last_scraped` = ?""",
+                               (shops_next, scrape_timestamp)
+                               )
+
+                # Insert guilds
+                for key, entry in data.get("guilds", {}).items():
+                    name = entry.get("display", key)
+                    col = entry.get("column", "NA")
+                    row = entry.get("row", "NA")
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO guilds (Name, `Column`, `Row`, `next_update`, `last_scraped`)
+                        VALUES (?, ?, ?, ?, ?)""",
+                                   (name, col, row, guilds_next, scrape_timestamp)
+                                   )
+
+                # Insert shops
+                for key, entry in data.get("shops", {}).items():
+                    name = entry.get("display", key)
+                    col = entry.get("column", "NA")
+                    row = entry.get("row", "NA")
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO shops (Name, `Column`, `Row`, `next_update`, `last_scraped`)
+                        VALUES (?, ?, ?, ?, ?)""",
+                                   (name, col, row, shops_next, scrape_timestamp)
+                                   )
+
+                # All building locations, including curated POIs, are
+                # server-owned in 0.14.0. Reconcile the complete snapshot.
+                server_buildings = data.get("buildings")
+                valid_buildings = []
+                malformed_buildings = False
+                if isinstance(server_buildings, dict):
+                    for entry in server_buildings.values():
+                        if not isinstance(entry, dict):
+                            malformed_buildings = True
+                            continue
+                        kind = entry.get("kind")
+                        name = str(entry.get("name") or "").strip()
+                        col = str(entry.get("column") or "").strip()
+                        row = str(entry.get("row") or "").strip()
+                        building_meta = BUILDING_CLASS_MAP.get(kind)
+                        if not building_meta:
+                            continue
+
+                        table = building_meta.get("table")
+                        if table not in {
+                            "banks",
+                            "taverns",
+                            "transits",
+                            "userbuildings",
+                            "placesofinterest",
+                        }:
+                            continue
+
+                        if name and col and row:
+                            valid_buildings.append((kind, name, col, row))
+                        else:
+                            malformed_buildings = True
+
+                # A missing, empty, or partial snapshot is not evidence that
+                # every locally known building was removed. Reject the entire
+                # snapshot if any server-owned entry is malformed, so a mixed
+                # valid/malformed response cannot erase known locations.
+                if valid_buildings and not malformed_buildings:
+                    for table in ("banks", "taverns", "transits", "userbuildings", "placesofinterest"):
+                        cursor.execute(f"DELETE FROM {table}")
+                    for kind, name, col, row in valid_buildings:
+                        self._upsert_building(cursor, kind, name, col, row)
+                elif server_buildings is not None:
+                    logging.warning(
+                        "Ignoring incomplete building snapshot; preserving local building data"
+                    )
+
+                # Record the server's own data timestamp so later /refresh
+                # "cooldown" responses can be compared against what we hold
+                # (see get_locations_last_updated / fetch_location_update).
+                if server_last_updated:
+                    cursor.execute(
+                        """
+                        INSERT INTO settings (setting_name, setting_value)
+                        VALUES ('locations_last_updated', ?)
+                        ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
+                        """,
+                        (server_last_updated,),
+                    )
+
+                conn.commit()
+                logging.info(f"Database updated with {len(data.get('guilds', {}))} guilds and {len(data.get('shops', {}))} shops.")
+
         except Exception as e:
-            logging.warning(f"Could not read stored locations timestamp: {e}")
-            return None
+            logging.error(f"Error updating database: {e}")
+            raise
 
     def fetch_and_merge_community_buildings(self, timeout: int = HTTP_REQUEST_TIMEOUT) -> int:
         """Pull crowdsourced non-mover buildings and merge them into the DB.
@@ -4376,6 +4832,24 @@ class RBCCommunityMap(QMainWindow):
         except Exception as e:
             logging.debug(f"Minimap redraw after refresh skipped: {e}")
 
+    def get_locations_last_updated(self) -> str | None:
+        """Return the server ``last_updated`` value stored at our last write.
+
+        This is the authoritative "which generation of bot data do we hold"
+        marker (the server's own timestamp, not our local write time), used to
+        decide whether a /refresh "cooldown" response is actually newer than
+        what we already have. Returns ``None`` if we have never stored one.
+        """
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                row = conn.cursor().execute(
+                    "SELECT setting_value FROM settings WHERE setting_name = 'locations_last_updated'"
+                ).fetchone()
+                return row[0] if row and row[0] else None
+        except Exception as e:
+            logging.warning(f"Could not read stored locations timestamp: {e}")
+            return None
+
     # -----------------------
     # Crowdsourced reporting preferences
     # -----------------------
@@ -4427,14 +4901,12 @@ class RBCCommunityMap(QMainWindow):
             logging.error(f"Failed to save reporting preference: {e}")
 
     def prompt_first_run_reporting_choice(self) -> None:
-        """First-run setup for crowdsourced sharing - asked exactly once.
+        """Ask once whether to contribute discovered locations, and store it.
 
         Only invoked when no preference row exists yet (see
-        :meth:`load_location_reporting_setting`); the choice is persisted
-        immediately, so this never asks again. Asks two things: whether to
-        contribute, and (if so) what name to credit contributions to (blank =
-        Anonymous). Closing the first dialog takes the privacy-preserving path
-        (No / do not share).
+        :meth:`load_location_reporting_setting`). Whichever button the user
+        picks is persisted, so this never asks again. Closing the dialog
+        defaults to the privacy-preserving choice (No / do not share).
         """
         box = QMessageBox(self)
         box.setWindowTitle("Contribute Discovered Locations?")
@@ -4450,17 +4922,9 @@ class RBCCommunityMap(QMainWindow):
         )
         box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         box.setDefaultButton(QMessageBox.StandardButton.Yes)
-        enabled = box.exec() == QMessageBox.StandardButton.Yes
+        choice = box.exec()
 
-        # Ask who to credit (only worth asking if they're contributing).
-        if enabled:
-            name, ok = QInputDialog.getText(
-                self,
-                "Contribution Credit",
-                "Name to credit your contributions to\n(leave blank for Anonymous):",
-            )
-            self.set_report_credit(name.strip() if (ok and name and name.strip()) else "Anonymous")
-
+        enabled = choice == QMessageBox.StandardButton.Yes
         self.toggle_location_reporting(enabled)
         self._reporting_pref_was_unset = False
         # Sync the menu check without re-triggering the persist handler.
@@ -4481,37 +4945,6 @@ class RBCCommunityMap(QMainWindow):
         except sqlite3.Error as e:
             logging.warning(f"Could not read report credit; using Anonymous: {e}")
         return "Anonymous"
-
-    def set_report_credit(self, name: str) -> None:
-        """Persist the contribution credit name (blank -> Anonymous)."""
-        credit = (name or "").strip() or "Anonymous"
-        self.report_credit = credit
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                conn.cursor().execute(
-                    """
-                    INSERT INTO settings (setting_name, setting_value)
-                    VALUES ('report_credit', ?)
-                    ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
-                    """,
-                    (credit,),
-                )
-                conn.commit()
-            logging.info("Contribution credit set to %r", credit)
-        except sqlite3.Error as e:
-            logging.error(f"Failed to save report credit: {e}")
-
-    def prompt_report_credit(self) -> None:
-        """Settings-menu action to view/change the contribution credit name."""
-        current = self.report_credit if self.report_credit != "Anonymous" else ""
-        name, ok = QInputDialog.getText(
-            self,
-            "Contribution Credit",
-            "Name to credit your contributions to\n(leave blank for Anonymous):",
-            text=current,
-        )
-        if ok:
-            self.set_report_credit(name)
 
     def _get_or_create_client_id(self) -> str:
         """Return this install's anonymous reporting id, creating one if needed.
@@ -4542,87 +4975,3 @@ class RBCCommunityMap(QMainWindow):
         except sqlite3.Error as e:
             logging.warning(f"Could not persist client_id; using ephemeral id: {e}")
             return uuid.uuid4().hex
-
-    def update_database_with_json(self, data):
-        """
-        Updates the local shops and guilds tables based on the JSON structure from the bot,
-        while preserving Peacekeeper's Missions.
-        """
-        try:
-            with sqlite3.connect(DB_PATH) as conn:
-                cursor = conn.cursor()
-
-                scrape_timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-                guilds_next = data.get("guilds_next_update")
-                shops_next = data.get("shops_next_update")
-                server_last_updated = data.get("last_updated")
-
-                # Clear old locations except Peacekeepers
-                cursor.execute("""
-                    UPDATE guilds
-                    SET `Column` = 'NA', `Row` = 'NA', `next_update` = ?, `last_scraped` = ?
-                    WHERE Name NOT LIKE 'Peacekeepers Mission%'""",
-                               (guilds_next, scrape_timestamp)
-                               )
-                cursor.execute("""
-                    UPDATE shops
-                    SET `Column` = 'NA', `Row` = 'NA', `next_update` = ?, `last_scraped` = ?""",
-                               (shops_next, scrape_timestamp)
-                               )
-
-                # Insert guilds
-                for key, entry in data.get("guilds", {}).items():
-                    name = entry.get("display", key)
-                    col = entry.get("column", "NA")
-                    row = entry.get("row", "NA")
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO guilds (Name, `Column`, `Row`, `next_update`, `last_scraped`)
-                        VALUES (?, ?, ?, ?, ?)""",
-                                   (name, col, row, guilds_next, scrape_timestamp)
-                                   )
-
-                # Insert shops
-                for key, entry in data.get("shops", {}).items():
-                    name = entry.get("display", key)
-                    col = entry.get("column", "NA")
-                    row = entry.get("row", "NA")
-                    cursor.execute("""
-                        INSERT OR REPLACE INTO shops (Name, `Column`, `Row`, `next_update`, `last_scraped`)
-                        VALUES (?, ?, ?, ?, ?)""",
-                                   (name, col, row, shops_next, scrape_timestamp)
-                                   )
-
-                # All building locations, including curated POIs, are
-                # server-owned in 0.14. Reconcile the complete snapshot.
-                server_buildings = data.get("buildings", {})
-                if isinstance(server_buildings, dict):
-                    for table in ("banks", "taverns", "transits", "userbuildings", "placesofinterest"):
-                        cursor.execute(f"DELETE FROM {table}")
-                    for entry in server_buildings.values():
-                        if not isinstance(entry, dict):
-                            continue
-                        kind = entry.get("kind")
-                        name = str(entry.get("name") or "").strip()
-                        col = str(entry.get("column") or "").strip()
-                        row = str(entry.get("row") or "").strip()
-                        if kind in BUILDING_CLASS_MAP and name and col and row:
-                            self._upsert_building(cursor, kind, name, col, row)
-
-                # Record the server's own data timestamp so later /refresh
-                # "cooldown" responses can be compared against what we hold
-                # (see get_locations_last_updated / fetch_location_update).
-                if server_last_updated:
-                    cursor.execute(
-                        """
-                        INSERT INTO settings (setting_name, setting_value)
-                        VALUES ('locations_last_updated', ?)
-                        ON CONFLICT(setting_name) DO UPDATE SET setting_value = excluded.setting_value
-                        """,
-                        (server_last_updated,),
-                    )
-
-                conn.commit()
-                logging.info(f"Database updated with {len(data.get('guilds', {}))} guilds and {len(data.get('shops', {}))} shops.")
-
-        except Exception as e:
-            logging.error(f"Error updating database: {e}")

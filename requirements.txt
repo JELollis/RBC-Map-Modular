@@ -11,3 +11,6 @@ requests==2.34.2
 
 # HTML parsing
 beautifulsoup4==4.15.0
+
+# OS credential store for passwords and session-cookie values
+keyring==25.7.0

@@ -2,6 +2,10 @@ from imports import *
 from constants import *
 
 
+# -----------------------
+# Character Dialog Class
+# -----------------------
+
 class CharacterDialog(QDialog):
     """
     Dialog for adding or editing a character.

@@ -1,8 +1,13 @@
 from imports import *
 from constants import *
 from directories import *
+from directories import _secure_data_permissions
+from secrets import *
 
 
+# -----------------------
+# SQLite Setup
+# -----------------------
 def create_tables(conn: sqlite3.Connection) -> None:
     """Create database tables if they don’t exist."""
     cursor = conn.cursor()
@@ -157,19 +162,20 @@ def create_tables(conn: sqlite3.Connection) -> None:
             raise
     conn.commit()
 
+
 def insert_initial_data(conn: sqlite3.Connection) -> None:
     """Insert initial data into the database."""
     cursor = conn.cursor()
     initial_data = [
+        # INSERT OR IGNORE (not REPLACE): these are user-mutable rows. This runs
+        # on every startup, so REPLACE would reset the user's chosen CSS profile,
+        # keybinds and theme colors to defaults on each launch. Seed only when a
+        # fresh DB is missing the row.
         ("INSERT OR IGNORE INTO settings (setting_name, setting_value) VALUES (?, ?)", [
             ('keybind_config', 1),
             ('css_profile', 'Default'),
             ('log_level', str(DEFAULT_LOG_LEVEL))
         ]),
-        # INSERT OR IGNORE (not REPLACE): user theme edits are upserted into this
-        # table by save_theme_settings, and this seed runs on every startup, so
-        # REPLACE would reset the user's colors to defaults each launch. Seed only
-        # the rows a fresh DB is missing.
         ("INSERT OR IGNORE INTO color_mappings (id, type, color) VALUES (?, ?, ?)", [
             (1, 'bank', '#0000ff'),
             (2, 'tavern', '#887700'),
@@ -761,6 +767,7 @@ def insert_initial_data(conn: sqlite3.Connection) -> None:
             raise
     conn.commit()
 
+
 def migrate_schema(conn: sqlite3.Connection) -> None:
     """
     Migrate the database schema to the latest version.
@@ -921,6 +928,7 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
             conn.rollback()
             raise
 
+
 def initialize_database(db_path: str = DB_PATH) -> bool:
     """
     Initialize the SQLite database with the required schema and data.
@@ -935,19 +943,32 @@ def initialize_database(db_path: str = DB_PATH) -> bool:
         with sqlite3.connect(db_path) as conn:
             conn.execute("PRAGMA foreign_keys = ON")  # Enable foreign key support
             create_tables(conn)                       # Fist create missing tables
+            ensure_credential_namespace(conn)
             migrate_schema(conn)                      # Then migrate schema
             insert_initial_data(conn)                 # THEN populate defaults
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO shops (Name, `Column`, Row)
+                SELECT DISTINCT shop_name, 'NA', 'NA'
+                FROM shop_items
+                WHERE shop_name IS NOT NULL AND TRIM(shop_name) <> ''
+                """
+            )
             logging.info(f"Database initialized successfully at {db_path}")
             return True
     except sqlite3.Error as e:
         logging.error(f"Failed to initialize database at {db_path}: {e}")
         return False
 
+
 # Call database initialization
 if not ensure_directories_exist():  # Ensure directories exist first
     logging.error("Required directories could not be created. Aborting database initialization.")
 elif not initialize_database(DB_PATH):
     logging.warning("Database initialization failed. Application may encounter issues.")
+
+_secure_data_permissions()
+
 
 # -----------------------
 # Load Data from Database
@@ -1118,7 +1139,7 @@ def load_data() -> tuple:
                     selected_character = {
                         "id": char[0],
                         "name": char[1],
-                        "password": char[2],
+                        "password": load_character_secret(conn, char[0], char[2]),
                     }
 
                     cursor.execute(
@@ -1162,6 +1183,7 @@ def load_data() -> tuple:
         )
         raise
 
+
 # -----------------------
 # Load Data at Startup
 # -----------------------
@@ -1189,7 +1211,7 @@ except sqlite3.Error:
         "Database load failed. Falling back to empty runtime data."
     )
 
-    columns = rows = {}
+    columns, rows = {}, {}
     banks_coordinates = {}
     taverns_coordinates = {}
     transits_coordinates = {}
