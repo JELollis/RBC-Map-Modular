@@ -1,0 +1,6 @@
+# Runtime dependencies for RBC Community Map 0.11.0.
+# Generated from the imports in main_0.11.0.py.
+
+PySide6
+beautifulsoup4
+requests
