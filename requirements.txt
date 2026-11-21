@@ -1,0 +1,8 @@
+# Runtime dependencies for RBC Community Map 0.6.1.
+# Generated from the imports in main_0.6.1.py.
+
+PyQt5
+PyQtWebEngine
+beautifulsoup4
+requests
+PyMySQL
