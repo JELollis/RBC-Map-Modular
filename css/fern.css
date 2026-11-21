@@ -1,0 +1,88 @@
+/* ==UserStyle==
+@name         VTDA Violet Neon 2024-09-15
+@version      20241012.18.15
+@namespace    https://userstyles.world/user/fernlovebond
+@description  A violet theme for the Vampires! The Dark Alleyway game by Raven Black. A deliberately gaudy theme. Uses free fonts from Google Fonts (see notes).
+@author       fernlovebond
+@license      No License
+
+@modified		Nesmuth
+@Adapted for	RBC Community Map Application
+==/UserStyle== 
+
+@-moz-document url-prefix("https://quiz.ravenblack.net/blood.pl") {
+ INFORMATION 
+
+
+    If you have any trouble with this, let me know:
+
+        Discord: @FernLovebond
+        email: soiledfern@proton.me
+
+    Include the phrase "Vampire CSS" in the sybject or
+    initial DM so I know not to block you.
+
+    NOTE!!
+
+    You will need to have the fonts I used installed or
+    they won't show up right. Alternately, just change 
+    the fonts to ones you DO have installed.
+
+    The fonts I use should all be freely available on 
+    the google fonts subdomain, https://fonts.google.com/
+
+    I have tried to import these fonts by default so you
+    don't need to mess around, but if you have some kind 
+    of display problem with the fonts, let me know.
+
+    ~ Fern
+*/
+@import url(https://fonts.googleapis.com/css?family=Akaya+Kanadaka|Bellota|Aclonica|Berkshire+Swash|Cherry+Swash|Megrim|Monoton|Itim|Pirata+One|Ubuntu|Amita);
+@import url(https://fonts.googleapis.com/css2?family=Akaya+Kanadaka&family=Bellota&family=Aclonica&family=Berkshire+Swash&family=Cherry+Swash&family=Monoton&family=Itim&family=Pirata+One&family=Ubuntu&family=Amita);
+@import url(https://fonts.googleapis.com/css2?family=Megrim&text=VAMPIRES!);
+div.spacey {width:500px;}
+div.spacey td {min-width:130px;}
+span.object {color:#b7ffa1;}
+#mo {background-color:#fb0;}
+.pansy {color:#ff57f4;}
+.cloak {color:#00ffff;}
+.rich {color:#44ff70;}
+td a[href*="/blood.pl?viewvamp="] {font:450 11pt 'Ubuntu', sans-serif;}
+td a[href*="/blood.pl?viewvamp="]:hover { -webkit-text-stroke-width:0.5px; -webkit-text-stroke-color:black; text-shadow:2px 2px 3px white, -2px -2px 3px white, -2px 2px 3px white, 2px -2px 3px white; animation:vamp1 1s ease-in-out infinite alternate;}
+.head a:hover { -webkit-text-stroke-width:0.5px; -webkit-text-stroke-color:black; text-shadow:2px 2px 3px white, -2px -2px 3px white, -2px 2px 3px white, 2px -2px 3px white; animation:vamp1 1s ease-in-out infinite alternate;}
+.head a {font-family:'Aclonica', sans-serif; font-size:1em;}
+.mh {font:400 8pt 'Bellota', sans-serif; color:#c6b3ff; opacity:0.7; transition:ease-in-out 0.5s;}
+.mh:hover {font:bold 'Bellota', sans-serif; color:#9172ff; opacity:1; transition:ease-in-out 0.5s;}
+td.cityblock {background-color:transparent;}
+td.intersect {background-color:transparent; background-image:url(https://fernlove.bond/images/tile-07.png); background-size:cover; background-blend-mode:difference;}
+td.street {background-color:transparent; background-image:url(https://fernlove.bond/images/tile-07.png); background-size:cover; background-blend-mode:difference;}
+td.city {border:solid #9900ff82 1px; border-radius:0.4em; background-color:#260326; background-image:url(https://fernlove.bond/images/tile-04.png); background-size:cover; background-blend-mode:difference;}
+span.intersect {background-color:#460853; border:solid #5c00db 1px; border-radius:0.5em; font-family:'Itim', fantasy; font-size:11pt; padding:0 5px;}
+span.transit {background-color:#804; border:solid #e797ff 1px; border-radius:0.4em;}
+span.pub {background-color:#397970; border:solid #e797ff 1px; border-radius:0.4em;}
+span.bank {background-color:#091e4f; border:solid #e797ff 1px; border-radius:0.4em;}
+span.shop {background-color:#185b27; border:solid #e797ff 1px; border-radius:0.4em;}
+span.grave {background-color:#888888; border:solid #e797ff 1px; color:#222222; border-radius:0.4em;}
+span.pk {background-color:#000066; border:solid #e797ff 1px; color:#6fff00; border-radius:0.4em;}
+span.lair {background-color:#66004d; border:solid #e797ff 1px; color:#cccccc; border-radius:0.4em;}
+span.alchemy {background-color:#66004d; border:solid #e797ff 1px; color:#cccccc; border-radius:0.4em;}
+span.human {font:bold 10pt 'Bellota', sans-serif;}
+span.vhuman {font-family:'Cherry Swash', fantasy; font-size:11pt; line-height:17pt; padding:0 4px; border-radius:0.4em; margin:2px; color:#31fd85; background:linear-gradient(rgba(0, 255, 21, .25) 0%, rgba(0,0,0,1) 48%, rgb(8, 91, 0, .5) 100%); animation:neonv 2s ease-in-out infinite alternate;}
+span.phuman {font-family:'Pirata One', sans-serif; font-weight:lighter; font-size:1.5em; line-height:1.7em; letter-spacing:.1rem; padding:0 4px; border:1px dotted #45dbff; border-radius:0.5em; margin:2px; color:#45dbff; background:linear-gradient(rgba(30,78,30,0) 5%, rgba(0,0,0,1) 50%, rgba(255,0,247,0) 95%) !important; animation:neonp 2s ease-in-out infinite alternate;}
+span.whuman {font-family:'Akaya Kanadaka', serif; font-weight:800; font-size:16pt; -webkit-text-stroke:0.5px black; line-height:20pt; padding:0 4px; border-radius:0.4em; margin:2px; color:#ff00ff; background:linear-gradient(rgba(30,78,30,0) 5%, rgba(0,0,0,1) 50%, rgba(255,0,247,0) 95%) !important; animation:neonw 2s ease-in-out infinite alternate;}
+.spacey {color:#d79aff;}
+div.spacey:first-of-type b:first-of-type {color:#d79aff; font:1.5em 'Amita'; line-height:1.6em;}
+td.intersect b {color:rgb(179, 117, 255); background:linear-gradient(#f000 5%, black 50%, #f000 95%); font-family:'Aclonica', sans-serif !important; font-weight:bolder; font-size:1.4em !important; padding:0 3px; border-radius:1em; -webkit-text-stroke-width:0.25px; -webkit-text-stroke-color:black;}
+td.street b {color:rgb(179, 117, 255); background:linear-gradient(#f000 5%, black 50%, #f000 95%); font-family:'Aclonica', sans-serif !important; font-weight:bolder; font-size:1.4em !important; padding:0 3px; border-radius:1em; -webkit-text-stroke-width:0.25px; -webkit-text-stroke-color:black;}
+td.city b {color:rgb(179, 117, 255); background:linear-gradient(#f000 5%, black 50%, #f000 95%); font-family:'Aclonica', sans-serif !important; font-weight:bolder; font-size:1.4em !important; padding:0 3px; border-radius:1em; -webkit-text-stroke-width:0.25px; -webkit-text-stroke-color:black;}
+span.sever {border:solid red 1px; color:red;}
+span.bind {border:solid red 1px; color:red;}
+div[style="padding:5px; border:solid 1px white;"] {border-radius:1em; border-color:indigo !important;}
+html body.search_plugin_added div#main center table tbody tr td div.spacey div center table tbody tr:nth-of-type(1) td:nth-of-type(1) {border-radius:1em 0 0 0;}
+html body.search_plugin_added div#main center table tbody tr td div.spacey div center table tbody tr:nth-of-type(1) td:nth-of-type(3) {border-radius:0 1em 0 0;}
+html body.search_plugin_added div#main center table tbody tr td div.spacey div center table tbody tr:nth-of-type(3) td:nth-of-type(1) {border-radius:0 0 0 1em;}
+html body.search_plugin_added div#main center table tbody tr td div.spacey div center table tbody tr:nth-of-type(3) td:nth-of-type(3) {border-radius:0 0 1em 0;}
+h1 {color:#1d0722; letter-spacing:8px; text-transform:uppercase; font-family:'Megrim'; font-weight:800; font-size:500%; margin:0 1em; text-shadow:1px 0px 4px #f6d5ffaa, 2px 0px 4px #ffd5feaa, 3px 0px 4px #f2d5ffaa, 2px 0px 3px #b22cd4aa, 2px 3px 15px #b22cd4aa, 2px 0px 15px, 5px 0px 125px, 20px 0vw 200px #992cd4aa, 40px 0vw 200px #a22cd4aa;}
+p[style="font-size:smaller; color:red; text-align:center;"] {color:#000 !important; letter-spacing:1px; text-shadow:1px 0px 4px #f5d5ffaa, 2px 0px 4px #f4d5ffaa, 3px 0px 4px #f9d5ffaa, 2px 0px 3px #D42CCAaa, 2px 3px 15px #D42CCAaa, 2px 0px 15px, 5px 0px 125px, 20px 0vw 200px #D42CCAaa, 40px 0vw 200px #D42CCAaa;}
+p[style="font-size:smaller; color:red; text-align:center;"] a:nth-of-type(1) {text-shadow:1px 0px 4px #d5eeff44, 2px 0px 4px #d5f7ff44, 3px 0px 4px #d5eeff44, 2px 0px 3px #2ca7d444, 2px 3px 15px #2cbbd444, 2px 0px 15px, 5px 0px 125px, 20px 0vw 200px #2cb2d444, 40px 0vw 200px #2c99d444; animation:flicker 14s linear infinite;}
+p[style="font-size:smaller; color:red; text-align:center;"] a:nth-of-type(2) {text-shadow:1px 0px 4px #d5eeff44, 2px 0px 4px #d5f7ff44, 3px 0px 4px #d5eeff44, 2px 0px 3px #2ca7d444, 2px 3px 15px #2cbbd444, 2px 0px 15px, 5px 0px 125px, 20px 0vw 200px #2cb2d444, 40px 0vw 200px #2c99d444; animation:flicker 9s linear infinite;}
