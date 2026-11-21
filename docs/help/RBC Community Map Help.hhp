@@ -1,0 +1,12 @@
+[OPTIONS]
+Compatibility=1.1 or later
+Compiled file=RBC Community Map Help.chm
+Contents file=RBC Community Map Help.hhc
+Default topic=RBC_Map_Help.html
+Display compile progress=No
+Full-text search=Yes
+Language=0x409 English (United States)
+Title=RBC Community Map Help
+
+[FILES]
+RBC_Map_Help.html
